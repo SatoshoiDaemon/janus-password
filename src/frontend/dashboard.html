@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Janus - Dashboard</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <div class="dashboard">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <h2>🔐 Gestor</h2>
+            </div>
+
+            <nav class="sidebar-nav">
+                <button class="nav-item active" data-tab="generator">
+                    🎲 Gerador de Senhas
+                </button>
+                <button class="nav-item" data-tab="credentials">
+                    🔑 Credenciais
+                </button>
+                <button class="nav-item" data-tab="notes">
+                    📝 Notas Seguras
+                </button>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="user-info" id="userInfo"></div>
+                <button class="btn btn-logout" id="logoutBtn">
+                    Sair
+                </button>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Password Generator Tab -->
+            <section id="generator" class="tab-content active">
+                <div class="tab-header">
+                    <h2>🎲 Gerador de Senhas</h2>
+                    <p>Gere senhas seguras e aleatórias</p>
+                </div>
+
+                <div class="content-card">
+                    <div class="password-generator">
+                        <div class="generated-password-box">
+                            <display id="generatedPassword" class="password-display">
+                                Clique em "Gerar" para começar
+                            </display>
+                            <button class="btn btn-secondary" id="copyPasswordBtn">
+                                📋 Copiar
+                            </button>
+                        </div>
+
+                        <div class="generator-options">
+                            <div class="option-group">
+                                <label class="toggle-label">
+                                    <input type="checkbox" id="useUppercase" checked>
+                                    <span class="toggle-box"></span>
+                                    <span>Letras Maiúsculas (A-Z)</span>
+                                </label>
+                            </div>
+
+                            <div class="option-group">
+                                <label class="toggle-label">
+                                    <input type="checkbox" id="useLowercase" checked>
+                                    <span class="toggle-box"></span>
+                                    <span>Letras Minúsculas (a-z)</span>
+                                </label>
+                            </div>
+
+                            <div class="option-group">
+                                <label class="toggle-label">
+                                    <input type="checkbox" id="useDigits" checked>
+                                    <span class="toggle-box"></span>
+                                    <span>Números (0-9)</span>
+                                </label>
+                            </div>
+
+                            <div class="option-group">
+                                <label class="toggle-label">
+                                    <input type="checkbox" id="useSpecial" checked>
+                                    <span class="toggle-box"></span>
+                                    <span>Caracteres Especiais (!@#$%...)</span>
+                                </label>
+                            </div>
+
+                            <div class="option-group">
+                                <label for="passwordLength">Comprimento: <span id="lengthValue">16</span></label>
+                                <input 
+                                    type="range" 
+                                    id="passwordLength" 
+                                    min="2" 
+                                    max="128" 
+                                    value="16"
+                                    class="slider"
+                                >
+                                <div class="length-display">2 - 128 caracteres</div>
+                            </div>
+                        </div>
+
+                        <button class="btn btn-primary btn-block" id="generateBtn">
+                            ✨ Gerar Senha
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Credentials Tab -->
+            <section id="credentials" class="tab-content">
+                <div class="tab-header">
+                    <h2>🔑 Credenciais</h2>
+                    <button class="btn btn-primary" id="addCredentialBtn">
+                        + Adicionar Credencial
+                    </button>
+                </div>
+
+                <div class="content-card">
+                    <div id="credentialsList" class="list-container">
+                        <p class="empty-state">Nenhuma credencial salva. Adicione uma nova!</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Notes Tab -->
+            <section id="notes" class="tab-content">
+                <div class="tab-header">
+                    <h2>📝 Notas Seguras</h2>
+                    <button class="btn btn-primary" id="addNoteBtn">
+                        + Adicionar Nota
+                    </button>
+                </div>
+
+                <div class="content-card">
+                    <div id="notesList" class="list-container">
+                        <p class="empty-state">Nenhuma nota salva. Adicione uma nova!</p>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Modal de Adicionar/Editar Credencial -->
+    <div id="credentialModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="credentialModalTitle">Adicionar Credencial</h3>
+                <button class="modal-close" id="closeCredentialModal">&times;</button>
+            </div>
+
+            <form id="credentialForm" class="form">
+                <div class="form-group">
+                    <label for="credentialSite">Nome do Site *</label>
+                    <input type="text" id="credentialSite" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="credentialLogin">Usuário/Login</label>
+                    <input type="text" id="credentialLogin">
+                </div>
+
+                <div class="form-group">
+                    <label for="credentialEmail">Email</label>
+                    <input type="email" id="credentialEmail">
+                </div>
+
+                <div class="form-group">
+                    <label for="credentialPassword">Senha *</label>
+                    <div class="password-input-wrapper">
+                        <input type="password" id="credentialPassword" required>
+                        <button type="button" class="toggle-password" id="toggleCredentialPassword">👁</button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="credentialMasterPassword">Senha Mestre *</label>
+                    <input type="password" id="credentialMasterPassword" required placeholder="Digite sua senha mestre">
+                </div>
+
+                <div class="form-group">
+                    <button type="button" class="btn btn-secondary" id="generatePasswordBtn">
+                        🎲 Gerar Senha
+                    </button>
+                </div>
+
+                <div class="modal-buttons">
+                    <button type="submit" class="btn btn-primary">Salvar</button>
+                    <button type="button" class="btn btn-secondary" id="cancelCredentialBtn">Cancelar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal de Visualizar Credencial -->
+    <div id="viewCredentialModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="viewCredentialTitle">Ver Credencial</h3>
+                <button class="modal-close" id="closeViewCredentialModal">&times;</button>
+            </div>
+
+            <div class="credential-view">
+                <div class="credential-field">
+                    <label>Nome do Site:</label>
+                    <p id="viewCredentialSite"></p>
+                </div>
+
+                <div class="credential-field">
+                    <label>Usuário/Login:</label>
+                    <p id="viewCredentialLogin"></p>
+                </div>
+
+                <div class="credential-field">
+                    <label>Email:</label>
+                    <p id="viewCredentialEmail"></p>
+                </div>
+
+                <div class="credential-field">
+                    <label>Senha:</label>
+                    <div class="password-display-wrapper">
+                        <input type="password" id="viewCredentialPassword" readonly>
+                        <button type="button" class="btn btn-secondary" id="copyCredentialPasswordBtn">
+                            📋 Copiar
+                        </button>
+                        <button type="button" class="btn btn-secondary" id="toggleViewCredentialPassword">
+                            👁 Mostrar
+                        </button>
+                    </div>
+                </div>
+
+                <div class="modal-buttons">
+                    <button type="button" class="btn btn-danger" id="deleteCredentialBtn">
+                        🗑️ Deletar
+                    </button>
+                    <button type="button" class="btn btn-secondary" id="closeViewCredentialBtn">
+                        Fechar
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de Adicionar/Editar Nota -->
+    <div id="noteModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="noteModalTitle">Adicionar Nota Segura</h3>
+                <button class="modal-close" id="closeNoteModal">&times;</button>
+            </div>
+
+            <form id="noteForm" class="form">
+                <div class="form-group">
+                    <label for="noteTitle">Título da Nota *</label>
+                    <input type="text" id="noteTitle" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="noteContent">Conteúdo *</label>
+                    <textarea id="noteContent" rows="8" required></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="notePassword">Senha da Nota *</label>
+                    <input type="password" id="notePassword" required placeholder="Defina uma senha de acesso">
+                </div>
+
+                <div class="modal-buttons">
+                    <button type="submit" class="btn btn-primary">Salvar Nota</button>
+                    <button type="button" class="btn btn-secondary" id="cancelNoteBtn">Cancelar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Modal de Visualizar Nota -->
+    <div id="viewNoteModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="viewNoteTitle">Ver Nota</h3>
+                <button class="modal-close" id="closeViewNoteModal">&times;</button>
+            </div>
+
+            <div class="note-view">
+                <div class="note-field">
+                    <label>Título:</label>
+                    <p id="viewNoteTitle"></p>
+                </div>
+
+                <div class="note-field">
+                    <label>Conteúdo:</label>
+                    <div id="viewNoteContent" class="note-content-display"></div>
+                </div>
+
+                <div class="note-field">
+                    <label>Link de Acesso:</label>
+                    <div class="note-link-wrapper">
+                        <input type="text" id="noteAccessLink" readonly>
+                        <button type="button" class="btn btn-secondary" id="copyNoteLinkBtn">
+                            📋 Copiar Link
+                        </button>
+                    </div>
+                </div>
+
+                <div class="modal-buttons">
+                    <button type="button" class="btn btn-danger" id="deleteNoteBtn">
+                        🗑️ Deletar
+                    </button>
+                    <button type="button" class="btn btn-secondary" id="closeViewNoteBtn">
+                        Fechar
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/js/script.js"></script>
+</body>
+</html>

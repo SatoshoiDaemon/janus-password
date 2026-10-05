@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Acessar Nota Segura</title>
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="auth-wrapper">
+            <div class="auth-card">
+                <div class="auth-header">
+                    <h1>🔐 Nota Segura</h1>
+                    <p>Digite a senha para acessar esta nota</p>
+                </div>
+
+                <div id="noteAccessForm" class="auth-form">
+                    <div class="form-group">
+                        <label for="accessPassword">Senha da Nota</label>
+                        <div class="password-input-wrapper">
+                            <input 
+                                type="password" 
+                                id="accessPassword" 
+                                placeholder="Digite a senha"
+                                required
+                            >
+                            <button type="button" class="toggle-password" id="togglePassword">
+                                👁
+                            </button>
+                        </div>
+                    </div>
+
+                    <button type="button" class="btn btn-primary btn-block" id="accessBtn">
+                        🔓 Acessar Nota
+                    </button>
+                </div>
+
+                <div id="message" class="message"></div>
+
+                <div id="noteContent" style="display: none;">
+                    <div class="form-divider">
+                        <span>Nota Acessada</span>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Título:</label>
+                        <p id="noteTitle" style="padding: 10px; background-color: #f9fafb; border-radius: 8px;"></p>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Conteúdo:</label>
+                        <div id="noteBody" style="padding: 15px; background-color: #f9fafb; border-radius: 8px; white-space: pre-wrap; word-break: break-word; min-height: 150px; max-height: 300px; overflow-y: auto;"></div>
+                    </div>
+
+                    <div class="form-group">
+                        <small style="color: #4b5563;">
+                            📅 Criada em: <span id="noteCreatedAt"></span>
+                        </small>
+                    </div>
+
+                    <button type="button" class="btn btn-secondary btn-block" id="copyNoteBtn">
+                        📋 Copiar Conteúdo
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const togglePassword = document.getElementById('togglePassword');
+        const passwordInput = document.getElementById('accessPassword');
+        const accessBtn = document.getElementById('accessBtn');
+        const messageDiv = document.getElementById('message');
+        const noteContentDiv = document.getElementById('noteContent');
+        const noteAccessForm = document.getElementById('noteAccessForm');
+
+        // Toggle visibilidade da senha
+        togglePassword.addEventListener('click', function(e) {
+            e.preventDefault();
+            const type = passwordInput.type === 'password' ? 'text' : 'password';
+            passwordInput.type = type;
+            this.textContent = type === 'password' ? '👁' : '🙈';
+        });
+
+        // Obter token da URL
+        const accessToken = window.location.pathname.split('/').pop();
+
+        // Acessar nota
+        accessBtn.addEventListener('click', async function() {
+            const password = passwordInput.value;
+
+            if (!password) {
+                messageDiv.className = 'message error';
+                messageDiv.textContent = 'Digite a senha da nota';
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/notes/access/${accessToken}`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        note_password: password
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    displayNote(data);
+                    noteAccessForm.style.display = 'none';
+                    noteContentDiv.style.display = 'block';
+                } else {
+                    messageDiv.className = 'message error';
+                    messageDiv.textContent = data.error || 'Erro ao acessar nota';
+                }
+            } catch (error) {
+                messageDiv.className = 'message error';
+                messageDiv.textContent = 'Erro ao conectar ao servidor';
+                console.error('Erro:', error);
+            }
+        });
+
+        function displayNote(data) {
+            document.getElementById('noteTitle').textContent = data.title;
+            document.getElementById('noteBody').textContent = data.content;
+            document.getElementById('noteCreatedAt').textContent = new Date(data.created_at).toLocaleDateString('pt-BR') + ' ' + new Date(data.created_at).toLocaleTimeString('pt-BR');
+        }
+
+        document.getElementById('copyNoteBtn').addEventListener('click', function() {
+            const content = document.getElementById('noteBody').textContent;
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(content);
+            } else {
+                const textarea = document.createElement('textarea');
+                textarea.value = content;
+                document.body.appendChild(textarea);
+                textarea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textarea);
+            }
+            alert('Conteúdo copiado!');
+        });
+
+        // Permitir Enter para acessar
+        passwordInput.addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                accessBtn.click();
+            }
+        });
+    </script>
+</body>
+</html>

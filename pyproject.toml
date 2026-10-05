@@ -1,0 +1,20 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+exclude = [".venv", "venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "B"]
+ignore = ["E501"]
+
+[tool.black]
+line-length = 120
+target-version = ["py311"]
+
+[tool.coverage.run]
+branch = true
+source = ["src/backend"]

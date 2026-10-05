@@ -1,0 +1,174 @@
+# Testes de API - REST Client
+
+# Certifique-se de que o servidor está rodando (python -m src.backend.run)
+# Base URL: http://localhost:5000
+
+### ==================== AUTENTICAÇÃO ====================
+
+### Registrar novo usuário
+POST http://localhost:5000/api/register
+Content-Type: application/json
+
+{
+  "username": "testuser",
+  "email": "test@example.com",
+  "password": "password123",
+  "password_confirm": "password123"
+}
+
+### Fazer login
+POST http://localhost:5000/api/login
+Content-Type: application/json
+
+{
+  "username": "testuser",
+  "password": "password123"
+}
+
+### Fazer logout
+POST http://localhost:5000/api/logout
+Content-Type: application/json
+
+### ==================== GERADOR DE SENHAS ====================
+
+### Gerar senha com configurações padrão
+POST http://localhost:5000/api/generate-password
+Content-Type: application/json
+
+{
+  "length": 16,
+  "use_uppercase": true,
+  "use_lowercase": true,
+  "use_digits": true,
+  "use_special": true
+}
+
+### Gerar senha apenas com letras
+POST http://localhost:5000/api/generate-password
+Content-Type: application/json
+
+{
+  "length": 12,
+  "use_uppercase": true,
+  "use_lowercase": true,
+  "use_digits": false,
+  "use_special": false
+}
+
+### Gerar senha longa
+POST http://localhost:5000/api/generate-password
+Content-Type: application/json
+
+{
+  "length": 128,
+  "use_uppercase": true,
+  "use_lowercase": true,
+  "use_digits": true,
+  "use_special": true
+}
+
+### ==================== CREDENCIAIS ====================
+
+# Após o login, obtenha o CSRF token e envie X-CSRF-Token nas operações protegidas.
+GET http://localhost:5000/api/csrf-token
+
+### Listar todas as credenciais
+GET http://localhost:5000/api/credentials
+
+### Adicionar credencial
+POST http://localhost:5000/api/credentials
+Content-Type: application/json
+
+{
+  "site_name": "Gmail",
+  "login": "meu_usuario",
+  "email": "usuario@gmail.com",
+  "password": "senha_secreta_123",
+  "master_password": "password123"
+}
+
+### Acessar credencial específica (substituir ID)
+GET http://localhost:5000/api/credentials/1
+Content-Type: application/json
+
+{
+  "master_password": "password123"
+}
+
+### Atualizar credencial
+PUT http://localhost:5000/api/credentials/1
+Content-Type: application/json
+
+{
+  "site_name": "Gmail Pessoal",
+  "login": "novo_usuario",
+  "email": "novo_email@gmail.com",
+  "password": "nova_senha",
+  "master_password": "password123"
+}
+
+### Deletar credencial
+DELETE http://localhost:5000/api/credentials/1
+
+### ==================== NOTAS SEGURAS ====================
+
+### Listar todas as notas
+GET http://localhost:5000/api/notes
+
+### Criar nova nota segura
+POST http://localhost:5000/api/notes
+Content-Type: application/json
+
+{
+  "title": "Minhas Notas Importantes",
+  "content": "Esta é uma nota secreta que será criptografada",
+  "note_password": "nota123"
+}
+
+### Acessar nota específica (substituir ID)
+GET http://localhost:5000/api/notes/1
+Content-Type: application/json
+
+{
+  "note_password": "nota123"
+}
+
+### Atualizar nota
+PUT http://localhost:5000/api/notes/1
+Content-Type: application/json
+X-CSRF-Token: {{csrf_token}}
+
+{
+  "title": "Notas Atualizadas",
+  "content": "Conteúdo atualizado da nota",
+  "note_password": "nota123"
+}
+
+### Deletar nota
+DELETE http://localhost:5000/api/notes/1
+
+### ==================== ACESSO A NOTAS VIA URL ====================
+
+### Obter nota via token público (substituir token)
+POST http://localhost:5000/api/notes/access/[TOKEN_AQUI]
+Content-Type: application/json
+
+{
+  "note_password": "nota123"
+}
+
+### ==================== OBSERVAÇÕES ====================
+
+# 1. Certifique-se de estar logado antes de acessar endpoints protegidos
+# 2. Use a senha master al autenticar credenciais
+# 3. Use o navegador para testar endpoints de GET com login
+# 4. Você pode usar ferramentas como:
+#    - REST Client (VSCode Extension)
+#    - Postman
+#    - Insomnia
+#    - cURL
+#
+# Exemplo com cURL:
+# curl -X POST http://localhost:5000/api/login \
+#   -H "Content-Type: application/json" \
+#   -d '{"username":"testuser","password":"password123"}'
