@@ -10,6 +10,7 @@ from typing import Any
 from dotenv import load_dotenv
 from sqlalchemy import Column, ForeignKey, Integer, MetaData, String, Table, Text, create_engine, inspect, text
 from sqlalchemy.engine import Connection, Engine, URL, RowMapping
+from sqlalchemy.pool import NullPool
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_DATABASE = str(PROJECT_ROOT / "database.db")
@@ -60,11 +61,13 @@ def configure_database(url: str | None = None) -> Engine:
     """Configure the shared engine, primarily useful for tests and app startup."""
     global DATABASE_URL, engine
     DATABASE_URL = url or build_database_url()
+    is_sqlite = DATABASE_URL.startswith("sqlite")
     engine = create_engine(
         DATABASE_URL,
         future=True,
         pool_pre_ping=True,
-        connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
+        poolclass=NullPool if is_sqlite else None,
+        connect_args={"check_same_thread": False, "timeout": 30} if is_sqlite else {},
     )
     return engine
 
@@ -182,6 +185,7 @@ class ConnectionAdapter:
 def get_db_connection() -> ConnectionAdapter:
     connection = engine.connect()
     if engine.dialect.name == "sqlite":
+        connection.execute(text("PRAGMA busy_timeout = 30000"))
         connection.execute(text("PRAGMA foreign_keys = ON"))
     return ConnectionAdapter(connection)
 

@@ -95,6 +95,13 @@ def login_required(f):
     return decorated_function
 
 
+@app.get("/api/user-info")
+@login_required
+def user_info():
+    """Return the non-sensitive identity details needed by the dashboard."""
+    return jsonify({"username": session["username"]}), 200
+
+
 # ==================== ROTAS DE AUTENTICAÇÃO ====================
 
 

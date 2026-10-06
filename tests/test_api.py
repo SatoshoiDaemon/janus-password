@@ -21,6 +21,13 @@ def register_and_login(client, username=None, password="correct-password"):
     return username
 
 
+def test_authenticated_user_info(authenticated_client):
+    response = authenticated_client.get("/api/user-info")
+
+    assert response.status_code == 200
+    assert response.get_json()["username"].startswith("user-")
+
+
 def test_hash_and_password_generation():
     password_hash = hash_password("strong-password")
     assert password_hash != "strong-password"
