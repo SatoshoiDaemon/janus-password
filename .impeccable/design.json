@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "world": "Seu Cofre Pessoal",
+  "mode": "operate",
+  "palette": {
+    "ink": "#202321",
+    "graphite": "#292D2A",
+    "deepGraphite": "#1E211F",
+    "paper": "#F1EEE6",
+    "paperBright": "#F8F6F0",
+    "line": "#D2CEC3",
+    "copper": "#9A542F",
+    "copperBright": "#AD643A",
+    "danger": "#96362F"
+  },
+  "typography": {
+    "display": "Georgia / Times New Roman",
+    "body": "system sans",
+    "mono": "system monospace"
+  },
+  "principles": [
+    "local-first clarity",
+    "calm precision around secrets",
+    "fast recurring credential access",
+    "red only for destructive actions",
+    "no emoji iconography"
+  ]
+}

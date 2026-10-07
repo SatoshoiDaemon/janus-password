@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Janus - Dashboard</title>
+    <title>Janus · Seu cofre pessoal</title>
     <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
@@ -11,25 +11,29 @@
         <!-- Sidebar -->
         <aside class="sidebar">
             <div class="sidebar-header">
-                <h2>🔐 Janus</h2>
+                <a class="brand" href="/dashboard" aria-label="Janus, seu cofre pessoal">
+                    <span class="brand-mark" aria-hidden="true"><span></span><span></span></span>
+                    <span><strong>Janus</strong><small>seu cofre pessoal</small></span>
+                </a>
+                <div class="local-badge"><span class="status-dot"></span> somente neste dispositivo</div>
             </div>
 
             <nav class="sidebar-nav">
                 <button class="nav-item active" data-tab="generator">
-                    🎲 Gerador de Senhas
+                    <span class="nav-icon icon-spark" aria-hidden="true"></span> Gerador de senhas
                 </button>
                 <button class="nav-item" data-tab="credentials">
-                    🔑 Credenciais
+                    <span class="nav-icon icon-key" aria-hidden="true"></span> Credenciais
                 </button>
                 <button class="nav-item" data-tab="notes">
-                    📝 Notas Seguras
+                    <span class="nav-icon icon-note" aria-hidden="true"></span> Notas seguras
                 </button>
             </nav>
 
             <div class="sidebar-footer">
-                <div class="user-info" id="userInfo"></div>
+                <div class="user-info" id="userInfo"><span class="avatar">J</span><span><small>cofre aberto por</small><strong>Usuário local</strong></span></div>
                 <button class="btn btn-logout" id="logoutBtn">
-                    Sair
+                    <span class="icon icon-lock" aria-hidden="true"></span> Bloquear cofre
                 </button>
             </div>
         </aside>
@@ -39,22 +43,26 @@
             <!-- Password Generator Tab -->
             <section id="generator" class="tab-content active">
                 <div class="tab-header">
-                    <h2>🎲 Gerador de Senhas</h2>
-                    <p>Gere senhas seguras e aleatórias</p>
+                    <h2>Gerador de senhas</h2>
+                    <p>Crie uma chave forte para o próximo acesso.</p>
                 </div>
 
                 <div class="content-card">
                     <div class="password-generator">
                         <div class="generated-password-box">
                             <display id="generatedPassword" class="password-display">
-                                Clique em "Gerar" para começar
+                                ainda não há uma senha gerada
                             </display>
                             <button class="btn btn-secondary" id="copyPasswordBtn">
-                                📋 Copiar
+                                <span class="icon icon-copy" aria-hidden="true"></span> Copiar
                             </button>
                         </div>
 
                         <div class="generator-options">
+                            <div class="option-group option-heading">
+                                <span class="field-label">Composição da senha</span>
+                                <small>Escolha os conjuntos permitidos.</small>
+                            </div>
                             <div class="option-group">
                                 <label class="toggle-label">
                                     <input type="checkbox" id="useUppercase" checked>
@@ -88,7 +96,7 @@
                             </div>
 
                             <div class="option-group">
-                                <label for="passwordLength">Comprimento: <span id="lengthValue">16</span></label>
+                                <label for="passwordLength">Comprimento <span class="value-chip"><span id="lengthValue">16</span> caracteres</span></label>
                                 <input 
                                     type="range" 
                                     id="passwordLength" 
@@ -102,7 +110,7 @@
                         </div>
 
                         <button class="btn btn-primary btn-block" id="generateBtn">
-                            ✨ Gerar Senha
+                            <span class="icon icon-spark" aria-hidden="true"></span> Gerar senha
                         </button>
                     </div>
                 </div>
@@ -111,9 +119,10 @@
             <!-- Credentials Tab -->
             <section id="credentials" class="tab-content">
                 <div class="tab-header">
-                    <h2>🔑 Credenciais</h2>
+                    <h2>Credenciais</h2>
+                    <p>Seus acessos, guardados localmente e prontos para usar.</p>
                     <button class="btn btn-primary" id="addCredentialBtn">
-                        + Adicionar Credencial
+                        <span class="icon icon-plus" aria-hidden="true"></span> Nova credencial
                     </button>
                 </div>
 
@@ -127,9 +136,10 @@
             <!-- Notes Tab -->
             <section id="notes" class="tab-content">
                 <div class="tab-header">
-                    <h2>📝 Notas Seguras</h2>
+                    <h2>Notas seguras</h2>
+                    <p>Textos sensíveis que não devem ficar expostos.</p>
                     <button class="btn btn-primary" id="addNoteBtn">
-                        + Adicionar Nota
+                        <span class="icon icon-plus" aria-hidden="true"></span> Nova nota
                     </button>
                 </div>
 

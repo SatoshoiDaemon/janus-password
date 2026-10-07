@@ -41,13 +41,15 @@ document.addEventListener('DOMContentLoaded', function() {
 // ==================== FUNÇÕES DE AUTENTICAÇÃO ====================
 function displayUserInfo() {
     const userInfo = document.getElementById('userInfo');
-    // A informação do usuário pode ser obtida da sessão no servidor
     fetch('/api/user-info', {
         method: 'GET'
     })
+    .then(response => response.ok ? response.json() : Promise.reject())
+    .then(data => {
+        userInfo.innerHTML = `<span class="avatar">${escapeHtml((data.username || 'U').charAt(0).toUpperCase())}</span><span><small>cofre aberto por</small><strong>${escapeHtml(data.username || 'Usuário local')}</strong></span>`;
+    })
     .catch(() => {
-        // Se não conseguir, exibe um nome genérico
-        userInfo.textContent = 'Usuário Logado';
+        userInfo.innerHTML = '<span class="avatar">U</span><span><small>cofre aberto por</small><strong>Usuário local</strong></span>';
     });
 }
 
@@ -203,7 +205,7 @@ async function generatePassword() {
 
 function copyPassword() {
     const password = document.getElementById('generatedPassword').textContent;
-    if (password !== 'Clique em "Gerar" para começar') {
+    if (password !== 'ainda não há uma senha gerada') {
         copyToClipboard(password);
         showMessage('Senha copiada!', 'success');
     }
@@ -327,13 +329,13 @@ function displayCredentials(credentials) {
             <div class="credential-info">
                 <div class="credential-name">${escapeHtml(cred.site_name)}</div>
                 <div class="credential-meta">
-                    ${cred.login ? `👤 ${escapeHtml(cred.login)}` : ''}
-                    ${cred.email ? ` | 📧 ${escapeHtml(cred.email)}` : ''}
+                    ${cred.login ? `login: ${escapeHtml(cred.login)}` : ''}
+                    ${cred.email ? ` · email: ${escapeHtml(cred.email)}` : ''}
                 </div>
             </div>
             <div class="item-actions">
-                <button class="btn btn-secondary" onclick="viewCredential(${cred.id})">👁️ Ver</button>
-                <button class="btn btn-danger" onclick="confirmDeleteCredential(${cred.id})">🗑️</button>
+                <button class="btn btn-secondary" onclick="viewCredential(${cred.id})">Ver segredo</button>
+                <button class="btn btn-danger" onclick="confirmDeleteCredential(${cred.id})">Excluir</button>
             </div>
         </div>
     `).join('');
@@ -515,7 +517,7 @@ function displayNotes(notes) {
             <div class="credential-info">
                 <div class="credential-name">${escapeHtml(note.title)}</div>
                 <div class="credential-meta">
-                    📅 ${new Date(note.created_at).toLocaleDateString('pt-BR')}
+                    criada em ${new Date(note.created_at).toLocaleDateString('pt-BR')}
                 </div>
             </div>
             <div class="item-actions">
