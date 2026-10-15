@@ -100,7 +100,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const field = document.getElementById('backupMasterPassword');
         const password = field.value; field.value = '';
         const file = document.getElementById('backupFile').files[0];
-        if (!file || file.size > 16 * 1024 * 1024) { showMessage('Selecione um backup de até 16 MiB.', 'error'); return; }
+        if (!file || file.size > 256 * 1024 * 1024) { showMessage('Selecione um backup de até 256 MiB.', 'error'); return; }
         try {
             const result = await vaultRequest('restore', {backup: JSON.parse(await file.text()), master_password: password});
             clearVaultUI();

@@ -1,167 +1,170 @@
-# Vault architecture and recovery
+# Architecture, formats and threat model
 
-## Local process and keys
+## Process and storage
 
-Run `python -m src.backend.run` as one local process. The service binds only to
-`127.0.0.1`/`localhost`, accepts those Host names, rejects cross-origin writes,
-and requires login, CSRF tokens and an unlocked vault for owner operations.
-An arbitrary local process does not get vault access merely by knowing the port;
-it still needs the authenticated session and unlock. There is no defense against
-an attacker already able to inspect this process, browser or OS account.
+The dependency-free browser interface talks to a local Waitress/Flask process.
+SQLite stores accounts, wrapped data keys, credentials, encrypted extended data,
+revision history, structured items, attachments, notes and hashed pairing tokens.
+One local process per named vault holds ephemeral unlock keys; a native file lock
+prevents a second launcher from opening the same name. Vaults have independent
+SQLite files under the platform-specific Janus data directory. Application
+binaries/installers live separately, so replacing them does not replace user data.
 
-Account passwords authenticate login. The independent master password unlocks
-the vault. Registering/logging in does not unlock a vault. Initial setup of an
-empty vault requires a master password of at least 12 characters. An existing
-vault's actual password is validated by authenticating its encrypted key and all
-credentials, including when it contains zero credentials.
+`app.py` handles authentication, request boundaries and the original credential/
+note APIs. `vault.py` owns unlock, key lifecycle, migration and backup transactions;
+`auth.py` implements compatible KDF/crypto readers. `entries.py`, `importers.py`,
+`features.py`, `browser_bridge.py`, `local.py`, `run.py` and `cli.py` implement the
+management layer, offline imports, bridge, application lifecycle and CLI.
 
-Each local account has one random Fernet data key. The master password wraps
-that key with the existing salted PBKDF2-HMAC-SHA256 + Fernet `v1` encryption.
-Credential passwords are `v2$<Fernet token>` encrypted with the random data key.
-`vaults.crypto_version = 2` identifies this arrangement. This version number
-does **not** mean Argon2id is already implemented.
+All credential mutations run in a transaction under the process lock. SQLite
+uses `BEGIN IMMEDIATE`, foreign-key enforcement and a busy timeout. The schema
+migration ledger records versions 1 (vault lifecycle) and 2 (extended tables).
+Initialization is idempotent and does not drop or rewrite existing records.
 
-The signed Flask cookie contains an opaque random unlock handle, never a key or
-master password. The server holds the key in an expiring, process-only registry.
-`VAULT_TIMEOUT` defaults to 300 seconds since the last vault operation. Status
-polls do not refresh it. Explicit lock, logout, process exit and password changes
-remove keys. A daemon prunes idle keys at least every 30 seconds, while every key
-lookup enforces expiry immediately. Registry bytearrays are overwritten on
-removal; Python, cryptography and browsers can retain immutable copies, so this
-is best-effort cleanup rather than guaranteed memory erasure.
+## Passwords and versioned keys
 
-One process is required because unlock handles are process-local. Threads are
-serialized for vault mutations. SQLite transactions use `BEGIN IMMEDIATE`; the
-optional SQL adapters lock the account row. Multi-worker hosting and shared
-network use are not supported by this lifecycle. External database compatibility
-has not been integration-tested by this change.
+Account login and vault unlock are distinct. New password hashes use Argon2id
+PHC strings (`$argon2id$…`), with 64 MiB memory, three iterations and one lane.
+Legacy salted PBKDF2-HMAC-SHA256 (100,000 iterations) hashes remain readable and
+upgrade only after successful login. Note hashes/content similarly upgrade on
+successful note access. Legacy values are not erased after failed authentication.
 
-Credential metadata remains plaintext in the database, as before. Backup payloads
-encrypt metadata as well. Notes retain their independently password-encrypted
-`v1` content and password hashes. Public note links, if explicitly used, require
-their own password/token and do not inherit the owner's vault lock.
+New password-encrypted values use:
 
-## Migration and recovery
+```text
+v3$argon2id$65536,3,1$<base64 salt>$<Fernet token>
+```
 
-Before upgrading, stop Janus and make an offline copy of the complete database
-(including SQLite WAL/SHM files if present). Do not overwrite that copy.
-`init_db()` adds the vault table and migration ledger and records schema version
-1 after the existing note-token column upgrades. It never deletes data.
+The salt is random, 16 bytes; Argon2id derives a 32-byte Fernet key. Readers bound
+memory/time/parallelism before deriving to reject resource-exhaustion parameters.
+The current reader accepts existing `v1$<salt>$<token>` PBKDF2 values. Unknown
+versions and malformed ciphertext are rejected.
 
-On first unlock without vault metadata, the service decrypts **all** existing
-`v1$<salt>$<token>` credentials before writing anything. Only then does one
-transaction create the wrapped key and convert all passwords to `v2`. A bad
-password, damaged item, unsupported format or failed commit leaves the original
-records unchanged. Repeated initialization and unlocks are idempotent.
+A vault has one random Fernet data key. Its master password encrypts that key in
+a `v3` envelope. Credential passwords and encrypted metadata/history/item/attachment
+payloads use `v2$<Fernet token>` with the random data key; `crypto_version=2`
+identifies this data-key arrangement independently from the envelope's KDF.
+Changing the master password authenticates the existing envelope/credentials,
+rewraps the data key atomically and invalidates every active account unlock.
+It does not rewrite every credential or change the login password.
 
-Older Janus versions allowed separate master passwords per credential. If these
-were used, unlock returns HTTP 409 and the failing credential ID. Recover by
-providing the original passwords through the local API (with login and CSRF):
+The signed Flask cookie carries an opaque unlock handle, never a password/key.
+The process registry holds expiring key bytearrays. Status polling and extension
+use do not extend unlock lifetime. Key lookup enforces expiry immediately, and a
+daemon removes idle keys at most 30 seconds after their deadline. Explicit lock,
+logout, password change and shutdown wipe registry bytearrays. Python and browser
+immutable copies cannot be guaranteed erased; memory/clipboard cleanup is
+best-effort and never represented as OS-wide secure erasure.
+
+The original credential names/login/email and structured item display names
+remain plaintext database metadata. Extended fields, secrets, history and
+attachment names/content are encrypted. Entire portable backup payloads, including
+all names/metadata, are encrypted. Independent secure notes retain their separate
+note passwords; vault-key notes are available as structured note items.
+
+## Upgrade and recovery
+
+Stop Janus and copy the original database, including SQLite WAL/SHM companions if
+present, before upgrading. Preserve that copy separately.
+
+Without existing vault metadata, first unlock decrypts **all** legacy v1
+credentials before writing a wrapped data key and converting credentials in one
+transaction. A wrong password, corrupted item or failed commit leaves records
+unchanged. Existing key envelopes are authenticated and upgraded from PBKDF2 to
+Argon2id on successful unlock without changing the underlying data key.
+
+Older Janus allowed different passwords per credential. A failed migration names
+the failing record. Recover through authenticated/CSRF-protected local unlock:
 
 ```json
-POST /api/vault/unlock
 {
-  "master_password": "the-password-to-protect-the-migrated-vault",
-  "legacy_passwords": {
-    "12": "original-password-of-item-12",
-    "19": "original-password-of-item-19"
-  }
+  "master_password": "the-password-for-the-migrated-vault",
+  "legacy_passwords": {"12": "original-item-password", "19": "another-original-password"}
 }
 ```
 
-All original passwords must be known; there is no bypass. Records from the
-pre-`v1` fixed-salt implementation remain unsupported, are never erased or
-silently replaced, and must be recovered with the original compatible version
-against a separate database copy before importing/recreating them. No recovery
-promise is made for unavailable encryption keys or actually corrupted data.
+Every original item password must be known. Pre-v1 fixed-salt records remain
+unsupported, are not deleted or silently overwritten, and must be recovered with
+the original compatible version against a separate copy before recreation/import.
+No migration can reconstruct unavailable keys or actually destroyed ciphertext.
 
-To change the master password, unlock first and submit the current and new
-passwords to `/api/vault/change-password`. The server authenticates the existing
-envelope and credentials, rewraps only the data key in one transaction, increments
-the revision and invalidates all process-local unlocks for that account. The
-login password is unchanged. Old backups remain protected by the master password
-used when those backups were created; a password change cannot revoke an offline
-backup. Re-export after changing it.
+## Portable backups
 
-## Backup and clean installation restoration
+`.janus` format 2 contains a wrapped data key plus a Fernet-authenticated encrypted
+payload. The authenticated payload binds the same envelope and includes all
+credentials, notes, metadata, history, trash, identities/cards and attachments.
+Format 1 backups from the initial lifecycle implementation remain readable.
+Unknown versions, bad passwords and malformed/tampered payloads are rejected.
 
-From the dashboard, unlock and select **Exportar backup criptografado**. Store
-the `.janus` file separately from the computer. It contains a versioned JSON
-container with a PBKDF2-wrapped key and a Fernet-authenticated encrypted payload
-containing all credential/secure-note rows and the bound key envelope. Titles,
-login names, hashes and secret values are inside the encrypted payload.
+Restore into an empty local account. Validate/decrypt before writing, remap all
+credential/attachment/history relationships, and commit all tables atomically.
+Old note links are replaced/revoked. Account login credentials, pairing tokens,
+configuration and machine-specific paths are not portable vault contents.
+Independent notes retain their own passwords: restoring validates their bytes
+through authenticated backup encryption, but cannot prove their original content
+was decryptable without each note password.
 
-On the destination:
+Automatic backups use the same format before mutations. The local launcher enables
+them in a per-vault directory; interval and retention are configurable. Master
+password changes force a snapshot when configured. Files use restrictive tempfile
+permissions, flush/fsync and atomic rename before retention pruning. A snapshot
+failure aborts the mutation. These are recovery points, not a scheduler running
+while the application is closed. Use explicit export for final latest-state
+migration. A prior backup still needs the password used when it was created;
+changing a password cannot revoke an already-copied offline backup.
 
-1. Install Janus and register a local account (its login password may differ).
-2. In the dashboard, select the `.janus` file and enter the backup's master password.
-3. Restore into this **empty** account; unlock with the backup's master password.
-4. Verify credentials and notes before removing the original installation.
+Attachments are limited to 8 MiB each. HTTP/backup requests default to 256 MiB
+(`JANUS_MAX_BACKUP_BYTES`). Oversized export is explicitly rejected so the app
+never hands out a backup that exceeds its configured restore limit. Large vaults
+may raise that limit, subject to local RAM. Keep another backup on a different
+device; application transactions cannot prevent hardware/media destruction.
 
-Restoration authenticates the container and every credential, validates the
-format/record structure, and inserts everything in one transaction. It remaps
-account/record IDs, leaves the new login credentials intact, revokes old public
-note links and refuses nonempty accounts. Notes keep their original passwords;
-the master password cannot decrypt them individually. Their ciphertext is
-preserved by backup authentication, but without the note password restoration
-cannot validate whether the original note was already corrupt. Account login
-passwords, `.env`, database-server configuration and OS settings are not portable
-vault contents. Default request limit is 16 MiB of JSON, including encryption
-overhead; this is not yet suitable for large attachments.
+## Import and browser boundary
 
-Automatic backups are optional pre-mutation recovery snapshots:
+Importers parse and validate all rows before writes. Preview returns item names/
+types, not passwords. Commit requires explicit confirmation and is one transaction.
+CSV aliases, KeePass XML, password/keyfile-protected KDBX with attachments and
+Bitwarden login/card/identity/note JSON are supported. Duplicate credential policy
+is explicit. Unknown types, passkeys and references to absent binary attachments
+fail explicitly rather than silently losing data. XML uses defusedxml; input
+limits and type checks reject malformed or entity-bearing documents.
 
-```dotenv
-JANUS_BACKUP_DIR=/absolute/path/to/janus-backups
-JANUS_BACKUP_INTERVAL=3600
-JANUS_BACKUP_RETENTION=10
-```
+The bridge is separate from cookie authentication. An unlocked owner creates a
+revocable extension-specific random token; only its SHA-256 digest is stored.
+Bridge requests require that token and the registered extension origin. Registered
+extension origins alone receive CORS allowance. Bridge endpoints do not accept
+account/master passwords or unlock a locked vault. Pairings are installation-local
+and are not restored from portable backups.
 
-Snapshots are evaluated on credential/note mutations, not by a scheduler while
-Janus is closed. The interval is the minimum time between snapshots. A snapshot
-contains the state **before** the mutation; use manual export for the final
-latest-state copy before moving machines. Password changes force a snapshot
-when enabled. Files are created with restrictive tempfile permissions, flushed,
-fsynced and atomically renamed; only then are older snapshots pruned. A configured
-backup failure aborts the requested mutation rather than silently continuing.
-This is not a guarantee against hardware-level power-loss/filesystem failures;
-OS-specific durability tests remain on the roadmap. Keep at least one backup on
-a different device. Snapshots of an empty vault are valid but contain no secrets.
+Domain matching is exact over scheme + IDNA hostname + effective port; no suffix
+or parent-domain wildcard exists. The extension rechecks active tab identity and
+origin after secret retrieval, injects only the top frame, checks the document
+origin again and refuses forms targeting another origin. Filling requires a
+specific user-selected credential and does not submit. Capture requires an
+explicit read followed by an explicit save on the same current origin.
 
-## Argon2id migration plan
+## Threat model and verification status
 
-PBKDF2 remains at the current 100,000 iterations for compatibility in this change.
-Before switching defaults:
+Controls cover wrong-password writes, partial migrations, account isolation,
+CSRF, unexpected local Host/DNS rebinding, cross-origin writes, stale unlocks,
+common domain confusion, corruption replacement, restore overwrite mistakes and
+accidental cached secret responses. The service rejects non-loopback binds.
 
-1. Benchmark Argon2id memory/time parameters on supported low-memory hardware;
-   store algorithm and bounded parameters in a new versioned envelope.
-2. Add known-answer, wrong-password, tampering and parameter-bound tests, including
-   historical fixtures for current `v1` envelopes and password hashes.
-3. Read legacy envelopes, authenticate the whole vault and rewrap the random data
-   key using Argon2id in one transaction after successful unlock. Do not re-encrypt
-   every credential solely to change KDFs.
-4. Keep old formats readable through an explicit compatibility window and document
-   older-app downgrade incompatibility, backup passwords and recovery.
-5. Independently review the migration and fault-injection tests before promoting
-   the new writer. Migrate login/note hashes and note-content KDFs separately.
+Not covered: compromised OS/browser/extension, keyloggers, process memory
+inspection, a stolen authenticated unlocked session, offline guessing of weak
+passwords, plaintext database metadata, rollback to an older valid database,
+loss of every backup or physical media failure. A paired compromised extension
+can act with its pairing permissions while the vault is unlocked. Pairings are
+revocable; they are not a defense against an already-compromised user account.
 
-## Threat model and verification limits
+Tests cover Argon2/PBKDF2 upgrades, RFC 6238 TOTP vectors, importer fixtures and
+KDBX attachments, history/trash, rollback/failure injection, full portable restore,
+strict bridge matching/revocation, single-instance launcher and shutdown. CI builds
+Linux and Windows, smoke-tests native CLI/installation and checks same-runner
+binary/extension reproducibility. Tagged releases produce signed GitHub build
+provenance. OS vendor/store certificates are different from provenance signatures.
 
-Protected: wrong-password writes, partial key migration, unauthenticated vault
-access, account isolation, GET bodies containing secrets, routine CSRF, DNS
-rebinding via unexpected Host, cross-origin writes, accidental cached responses,
-silent replacement of damaged credentials and restore-overwrite mistakes.
-
-Not protected: compromised OS/browser/extensions, process memory inspection,
-keyloggers, stolen authenticated unlocked sessions, plaintext database metadata,
-offline password guessing against weak master/note passwords, physical media
-failure without an independent backup, rollback to an older valid database, or
-all effects of malicious browser/local processes. The Flask development server
-is still a development server; signed installers, process pairing and an
-independent audit remain future work. Clipboard cleanup depends on browser
-permissions and does not claim reliable OS-wide memory/clipboard erasure.
-
-Local tests cover migration concurrency, rollback on failed migration/commit,
-wrong passwords, damaged SQLite files/ciphertexts, session expiry/key clearing,
-backup tampering, retention and restoration into a new database and login session.
-They do not replace independent cryptographic review or OS packaging tests.
+An independent professional security audit has **not** been completed. An attempted
+CodeRabbit external automated review was blocked by unavailable authentication in
+this environment; it is not counted as a completed review. Security-sensitive
+changes require external reviewer attention before claims of audited stability.

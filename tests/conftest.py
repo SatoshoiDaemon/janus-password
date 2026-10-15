@@ -8,6 +8,7 @@ from src.backend.app import app, limiter
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("JANUS_HOME", str(tmp_path / "home"))
     vault._sessions.clear()
     database.configure_database(f"sqlite:///{tmp_path / 'test.db'}")
     database.init_db()

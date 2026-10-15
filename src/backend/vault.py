@@ -19,7 +19,8 @@ from sqlalchemy import select
 from . import database as db
 from .auth import decrypt_password, encrypt_password
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
+MAX_BACKUP_BYTES = int(os.environ.get("JANUS_MAX_BACKUP_BYTES", str(256 * 1024 * 1024)))
 CRYPTO_VERSION = 2
 TIMEOUT = max(1, int(os.environ.get("VAULT_TIMEOUT", "300")))
 mutex = threading.RLock()
@@ -137,6 +138,12 @@ def unlock(user_id, password, legacy_passwords=None):
             for row in _credentials(conn, user_id):
                 unseal(row["password_encrypted"], key)
             revision = meta["revision"]
+            if meta["wrapped_key"].startswith("v1$"):
+                conn.execute(
+                    db.vaults.update()
+                    .where(db.vaults.c.user_id == user_id)
+                    .values(wrapped_key=encrypt_password(key.decode(), password))
+                )
         else:
             # Authenticate every legacy item BEFORE establishing a vault password.
             # Mixed-password legacy vaults may provide per-item recovery passwords.
@@ -201,19 +208,30 @@ def snapshot(conn, user_id, key):
         for row in conn.execute(select(db.secure_notes).where(db.secure_notes.c.user_id == user_id)).mappings()
     ]
     for row in notes:
-        if not isinstance(row["content_encrypted"], str) or not row["content_encrypted"].startswith("v1$"):
+        if not isinstance(row["content_encrypted"], str) or not row["content_encrypted"].startswith(("v1$", "v3$")):
             raise VaultError(f"Nota {row['id']} usa formato não suportado. Recupere-a antes de exportar.", 409)
     payload = {"version": FORMAT_VERSION, "credentials": credentials, "notes": notes}
     # The entire payload, including names and note password hashes, is encrypted.
     # Bind the envelope to the authenticated payload to detect envelope tampering.
     payload["wrapped_key"] = meta["wrapped_key"]
-    return {
+    payload["extras"] = {}
+    for name, table in db.portable_tables.items():
+        rows = [dict(row) for row in conn.execute(select(table).where(table.c.user_id == user_id)).mappings()]
+        for row in rows:
+            unseal(row["payload"], key)
+        payload["extras"][name] = rows
+    result = {
         "format": "janus-backup",
         "version": FORMAT_VERSION,
         "crypto_version": CRYPTO_VERSION,
         "wrapped_key": meta["wrapped_key"],
         "payload": seal(json.dumps(payload, ensure_ascii=False), key),
     }
+    if len(json.dumps(result, ensure_ascii=False).encode()) > MAX_BACKUP_BYTES - 2048:
+        raise VaultError(
+            "Backup excede o limite configurado. Aumente JANUS_MAX_BACKUP_BYTES antes de exportar/restaurar.", 413
+        )
+    return result
 
 
 def export_backup(user_id, token):
@@ -226,14 +244,15 @@ def _validate_backup(backup, password):
     if (
         not isinstance(backup, dict)
         or backup.get("format") != "janus-backup"
-        or backup.get("version") != FORMAT_VERSION
+        or type(backup.get("version")) is not int
+        or backup.get("version") not in {1, FORMAT_VERSION}
         or backup.get("crypto_version") != CRYPTO_VERSION
     ):
         raise VaultError("Formato ou versão de backup não suportado.")
     try:
         key = unwrap(backup["wrapped_key"], password)
         payload = json.loads(unseal(backup["payload"], key))
-        if payload["version"] != FORMAT_VERSION or payload["wrapped_key"] != backup["wrapped_key"]:
+        if payload["version"] != backup["version"] or payload["wrapped_key"] != backup["wrapped_key"]:
             raise ValueError("Envelope mismatch")
         for table_name, table in (("credentials", db.credentials), ("notes", db.secure_notes)):
             rows = payload[table_name]
@@ -249,8 +268,28 @@ def _validate_backup(backup, password):
                     raise ValueError("Invalid field type")
                 if table_name == "credentials":
                     unseal(row["password_encrypted"], key)
-                elif not isinstance(row["content_encrypted"], str) or not row["content_encrypted"].startswith("v1$"):
+                elif not isinstance(row["content_encrypted"], str) or not row["content_encrypted"].startswith(
+                    ("v1$", "v3$")
+                ):
                     raise ValueError("Unsupported note format")
+        credential_ids = {row["id"] for row in payload["credentials"]}
+        extras = payload.get("extras", {})
+        if not isinstance(extras, dict) or set(extras) - set(db.portable_tables):
+            raise ValueError("Unknown extra tables")
+        for name, rows in extras.items():
+            table = db.portable_tables[name]
+            if not isinstance(rows, list):
+                raise ValueError("Invalid table")
+            for row in rows:
+                if not isinstance(row, dict) or set(row) != set(table.columns.keys()):
+                    raise ValueError("Invalid extra fields")
+                if (
+                    "credential_id" in row
+                    and row["credential_id"] is not None
+                    and row["credential_id"] not in credential_ids
+                ):
+                    raise ValueError("Dangling credential")
+                unseal(row["payload"], key)
         return key, payload
     except (KeyError, TypeError, ValueError) as exc:
         raise VaultError("Backup inválido; nenhum dado foi alterado.") from exc
@@ -260,7 +299,11 @@ def restore_backup(user_id, backup, password):
     key, payload = _validate_backup(backup, password)
     with mutex, transaction(user_id) as conn:
         count_notes = conn.execute(select(db.secure_notes.c.id).where(db.secure_notes.c.user_id == user_id)).first()
-        if _credentials(conn, user_id) or count_notes:
+        has_extras = any(
+            conn.execute(select(table).where(table.c.user_id == user_id)).first()
+            for table in db.portable_tables.values()
+        )
+        if _credentials(conn, user_id) or count_notes or has_extras:
             raise VaultError("Restaure em uma conta local vazia para evitar sobrescrever dados.", 409)
         previous = _metadata(conn, user_id)
         revision = previous["revision"] + 1 if previous else 1
@@ -270,6 +313,7 @@ def restore_backup(user_id, backup, password):
                 user_id=user_id, wrapped_key=backup["wrapped_key"], revision=revision, crypto_version=CRYPTO_VERSION
             )
         )
+        credential_map = {}
         for table_name, table in (("credentials", db.credentials), ("notes", db.secure_notes)):
             for row in payload[table_name]:
                 values = {k: v for k, v in row.items() if k not in {"id", "user_id"}}
@@ -278,6 +322,15 @@ def restore_backup(user_id, backup, password):
                     # Old local links must never become active on the new installation.
                     values["access_token"] = secrets.token_urlsafe(32)
                     values["access_token_revoked_at"] = "1970-01-01 00:00:00"
+                result = conn.execute(table.insert().values(**values))
+                if table_name == "credentials":
+                    credential_map[row["id"]] = result.inserted_primary_key[0]
+        for name, table in db.portable_tables.items():
+            for row in payload.get("extras", {}).get(name, []):
+                values = {k: v for k, v in row.items() if k not in {"id", "user_id"}}
+                values["user_id"] = user_id
+                if "credential_id" in values and values["credential_id"] is not None:
+                    values["credential_id"] = credential_map[values["credential_id"]]
                 conn.execute(table.insert().values(**values))
     with mutex:
         invalidate(user_id)

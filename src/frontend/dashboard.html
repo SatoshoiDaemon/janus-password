@@ -31,6 +31,8 @@
                 <button class="nav-item" data-tab="notes">
                     <span class="nav-icon icon-note" aria-hidden="true"></span> Notas seguras
                 </button>
+                <button class="nav-item" data-tab="workspace"><span class="nav-icon icon-note" aria-hidden="true"></span> Itens e anexos</button>
+                <button class="nav-item" data-tab="recovery"><span class="nav-icon icon-key" aria-hidden="true"></span> Histórico e lixeira</button>
             </nav>
 
             <div class="sidebar-footer">
@@ -73,6 +75,20 @@
                     <button class="btn btn-secondary" type="submit">Restaurar backup</button>
                 </form>
                 </details>
+                <details><summary>Importar de outro gerenciador</summary>
+                <form id="importForm" class="form">
+                    <label>Formato<select id="importFormat"><option value="csv">CSV</option><option value="bitwarden">Bitwarden JSON</option><option value="keepass-kdbx">KeePass KDBX</option><option value="keepass-xml">KeePass XML</option></select></label>
+                    <label>Arquivo<input type="file" id="importFile" required></label>
+                    <label>Senha KDBX (se necessária)<input type="password" id="importPassword" autocomplete="off"></label>
+                    <label>Keyfile KDBX (se necessário)<input type="file" id="importKeyfile"></label>
+                    <label>Duplicatas<select id="importDuplicates"><option value="skip">Ignorar entradas idênticas</option><option value="keep">Manter todas</option></select></label>
+                    <button class="btn btn-secondary">Visualizar importação</button>
+                </form><div id="importPreview" role="status"></div><button id="confirmImport" class="btn btn-primary" hidden>Confirmar importação</button></details>
+                <details><summary>Parear navegador</summary><p>Instale a extensão Janus e copie a origem exibida nela. Cada pareamento pode ser revogado.</p>
+                <form id="pairForm" class="form"><label>Nome do navegador<input id="pairName" required></label><label>Origem exibida pela extensão<input id="pairOrigin" required placeholder="chrome-extension://… ou moz-extension://…"></label><button class="btn btn-primary">Criar pareamento</button></form>
+                <p id="pairToken" role="status"></p><div id="pairingsList"></div></details>
+                <details><summary>Aplicação local e múltiplos cofres</summary><p>Cada cofre usa seu próprio banco local. Abra outro cofre pelo inicializador Janus ou pela CLI.</p><div id="localVaults"></div><form id="localVaultForm" class="form"><label>Nome do novo cofre<input id="localVaultName" required pattern="[A-Za-z0-9_-]{1,64}"></label><button class="btn btn-secondary">Criar cofre local</button></form>
+                <form id="localSettingsForm" class="form"><label>Bloqueio por inatividade (segundos)<input type="number" id="localTimeout" min="30" max="3600" value="300"></label><label>Intervalo dos backups (segundos)<input type="number" id="localBackupInterval" min="0" value="3600"></label><label>Backups a manter<input type="number" id="localBackupRetention" min="1" max="1000" value="10"></label><button class="btn btn-secondary">Salvar configurações</button></form><button class="btn btn-danger" id="shutdownBtn" type="button">Encerrar Janus</button></details>
                 <form id="changeMasterForm" class="form" hidden>
                     <label for="currentMaster">Senha mestra atual</label>
                     <input id="currentMaster" type="password" autocomplete="current-password" required>
@@ -93,6 +109,7 @@
 
                 <div class="content-card">
                     <div class="password-generator">
+                        <div class="vault-filters"><label>Palavras na passphrase<input id="passphraseWords" type="number" min="4" max="12" value="6"></label><button id="passphraseBtn" class="btn btn-secondary">Gerar passphrase</button></div>
                         <div class="generated-password-box">
                             <display id="generatedPassword" class="password-display">
                                 ainda não há uma senha gerada
@@ -160,6 +177,25 @@
                 </div>
             </section>
 
+            <section id="workspace" class="tab-content">
+                <div class="tab-header"><div><h2>Itens e anexos</h2><p>Identidades, cartões e arquivos protegidos pelo seu cofre.</p></div></div>
+                <div class="content-card vault-controls">
+                    <div id="itemsList"></div>
+                    <details><summary>Adicionar ou editar item</summary>
+                    <form id="itemForm" class="form"><input id="itemId" type="hidden">
+                    <label>Tipo<select id="itemKind"><option value="identity">Identidade</option><option value="card">Cartão</option><option value="note">Nota do cofre</option></select></label>
+                    <label>Nome<input id="itemName" required></label><div id="itemFields"></div>
+                    <button type="button" id="addItemField" class="btn btn-secondary">Adicionar campo</button>
+                    <button class="btn btn-primary">Salvar item</button></form></details>
+                    <h3>Anexos criptografados</h3><p>Até 8 MiB por arquivo. Os anexos acompanham o backup.</p>
+                    <form id="attachmentForm" class="form"><label>Arquivo<input id="attachmentFile" type="file" required></label><label>Credencial relacionada (opcional)<select id="attachmentCredential"><option value="">Arquivo independente</option></select></label><button class="btn btn-primary">Guardar anexo</button></form>
+                    <div id="attachmentsList"></div>
+                </div>
+            </section>
+            <section id="recovery" class="tab-content">
+                <div class="tab-header"><div><h2>Histórico e lixeira</h2><p>Recupere exclusões e versões anteriores.</p></div></div>
+                <div class="content-card vault-controls"><h3>Lixeira</h3><div id="trashList"></div><h3>Histórico de alterações</h3><p>Use “Histórico” em uma credencial para listar suas versões.</p><div id="historyList"></div></div>
+            </section>
             <!-- Credentials Tab -->
             <section id="credentials" class="tab-content">
                 <div class="tab-header">
@@ -171,6 +207,13 @@
                 </div>
 
                 <div class="content-card">
+                    <div class="vault-filters">
+                        <label>Pesquisar<input id="credentialSearch" type="search" placeholder="Nome, login, URL ou tag" autocomplete="off"></label>
+                        <label>Pasta<select id="folderFilter"><option value="">Todas</option></select></label>
+                        <label><input id="favoriteFilter" type="checkbox"> Somente favoritos</label>
+                    </div>
+                    <button class="btn btn-secondary" id="healthBtn">Verificar senhas fracas, repetidas e antigas</button>
+                    <div id="healthResults" role="status"></div>
                     <div id="credentialsList" class="list-container">
                         <p class="empty-state">Nenhuma credencial salva. Adicione uma nova!</p>
                     </div>
@@ -228,6 +271,13 @@
                     </div>
                 </div>
 
+                <div class="form-group"><label for="credentialFolder">Pasta</label><input id="credentialFolder" type="text"></div>
+                <div class="form-group"><label for="credentialTags">Tags separadas por vírgula</label><input id="credentialTags" type="text"></div>
+                <div class="form-group"><label for="credentialUrls">URLs completas, uma por linha</label><textarea id="credentialUrls" rows="3"></textarea></div>
+                <div class="form-group"><label><input id="credentialFavorite" type="checkbox"> Favorito</label></div>
+                <div class="form-group"><label for="credentialTotp">Segredo TOTP (Base32 ou otpauth)</label><input id="credentialTotp" type="password" autocomplete="off"></div>
+                <div class="form-group"><label for="credentialNotes">Observações</label><textarea id="credentialNotes" rows="3"></textarea></div>
+                <div class="form-group"><label>Campos personalizados</label><div id="customFields"></div><button class="btn btn-secondary" type="button" id="addCustomField">Adicionar campo</button></div>
                 <div class="form-group">
                     <button type="button" class="btn btn-secondary" id="generatePasswordBtn">
                         🎲 Gerar Senha
@@ -366,5 +416,6 @@
 
     <script src="/js/script.js"></script>
     <script src="/js/vault.js"></script>
+    <script src="/js/workspace.js"></script>
 </body>
 </html>

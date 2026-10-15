@@ -7,7 +7,7 @@ def test_encrypted_values_use_a_random_salt_and_reject_legacy_values():
     second = encrypt_password("secret", "master-password")
 
     assert first != second
-    assert first.startswith("v1$")
+    assert first.startswith("v3$")
     assert decrypt_password(first, "master-password") == "secret"
     assert decrypt_password(first, "wrong-password") is None
     assert decrypt_password("legacy-ciphertext", "master-password") is None

@@ -252,6 +252,7 @@ function openAddCredentialModal() {
     currentCredentialId = null;
     document.getElementById('credentialModalTitle').textContent = 'Adicionar Credencial';
     document.getElementById('credentialForm').reset();
+    document.getElementById('customFields').replaceChildren();
     openModal('credentialModal');
 }
 
@@ -290,7 +291,8 @@ async function saveCredential(e) {
                 site_name: site_name,
                 login: login,
                 email: email,
-                password: password
+                password: password,
+                ...credentialExtraValues()
             })
         });
 
@@ -328,28 +330,9 @@ async function loadCredentials() {
 }
 
 function displayCredentials(credentials) {
-    const container = document.getElementById('credentialsList');
-
-    if (credentials.length === 0) {
-        container.innerHTML = '<p class="empty-state">Nenhuma credencial salva. Adicione uma nova!</p>';
-        return;
-    }
-
-    container.innerHTML = credentials.map(cred => `
-        <div class="credential-item">
-            <div class="credential-info">
-                <div class="credential-name">${escapeHtml(cred.site_name)}</div>
-                <div class="credential-meta">
-                    ${cred.login ? `login: ${escapeHtml(cred.login)}` : ''}
-                    ${cred.email ? ` · email: ${escapeHtml(cred.email)}` : ''}
-                </div>
-            </div>
-            <div class="item-actions">
-                <button class="btn btn-secondary" onclick="viewCredential(${cred.id})">Ver segredo</button>
-                <button class="btn btn-danger" onclick="confirmDeleteCredential(${cred.id})">Excluir</button>
-            </div>
-        </div>
-    `).join('');
+    credentialCache = credentials;
+    updateCredentialFilters();
+    renderCredentialResults();
 }
 
 function escapeHtml(text) {
@@ -403,7 +386,7 @@ function copyCredentialPassword() {
 }
 
 function confirmDeleteCredential(id) {
-    if (confirm('Tem certeza que deseja deletar esta credencial?')) {
+    if (confirm('Mover esta credencial para a lixeira?')) {
         currentCredentialId = id;
         deleteCredential();
     }
@@ -420,7 +403,7 @@ async function deleteCredential() {
         const data = await response.json();
 
         if (response.ok) {
-            showMessage('Credencial deletada!', 'success');
+            showMessage('Credencial movida para a lixeira!', 'success');
             closeViewCredentialModal();
             loadCredentials();
         } else {

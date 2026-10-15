@@ -136,7 +136,7 @@ def legacy_rows(client):
         for password, value in ((MASTER, "first"), ("other-password", "second")):
             conn.execute(
                 db.credentials.insert().values(
-                    user_id=1, site_name=value, password_encrypted=encrypt_password(value, password)
+                    user_id=1, site_name=value, password_encrypted=encrypt_password(value, password, legacy=True)
                 )
             )
 
@@ -204,7 +204,7 @@ def test_backup_round_trip_into_clean_installation(authenticated_client, tmp_pat
     backup = exported.json
     for secret in ("Example", "stored-secret", "Private note", "sensitive note", MASTER):
         assert secret not in json.dumps(backup)
-    assert backup["version"] == 1
+    assert backup["version"] == 2
     assert backup["crypto_version"] == 2
     # No source database, session, user IDs, or SECRET_KEY reused.
     db.configure_database(f"sqlite:///{tmp_path / 'clean-install.db'}")
@@ -300,7 +300,7 @@ def test_parallel_migration_creates_one_key(client):
 
 def test_schema_records_version_and_sqlite_corruption_is_reported(client, tmp_path):
     with db.engine.connect() as conn:
-        assert conn.execute(select(db.schema_migrations.c.version)).scalars().all() == [1]
+        assert conn.execute(select(db.schema_migrations.c.version)).scalars().all() == [1, 2]
         assert conn.execute(text("PRAGMA integrity_check")).scalar_one() == "ok"
     damaged = tmp_path / "damaged.db"
     damaged.write_bytes(b"this is not an sqlite database")
@@ -416,7 +416,7 @@ def test_schema_migrates_old_note_columns_without_replacing_records(client, tmp_
         assert row["title"] == "Retain me"
         assert row["content_encrypted"] == "old-ciphertext"
         assert row["access_token_expires_at"] is not None
-        assert conn.execute(select(db.schema_migrations.c.version)).scalar_one() == 1
+        assert conn.execute(select(db.schema_migrations.c.version)).scalars().all() == [1, 2]
 
 
 @pytest.mark.parametrize("payload", [[], {"master_password": []}, {"master_password": None}])

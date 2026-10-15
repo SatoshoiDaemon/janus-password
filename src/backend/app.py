@@ -11,11 +11,15 @@ from pathlib import Path
 
 from .database import get_db_connection, init_db
 from . import database as db
-from . import vault
-from sqlalchemy import select, func
+from . import vault, entries
+from .features import install as install_features
+from .local import install_routes as install_local
+from .browser_bridge import install as install_browser, cors_origin_allowed
+from sqlalchemy import select
 from urllib.parse import urlsplit
 from .auth import (
     hash_password,
+    needs_rehash,
     verify_password,
     encrypt_password,
     decrypt_password,
@@ -42,7 +46,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE=os.environ.get("SESSION_COOKIE_SAMESITE", "Lax"),
     SESSION_COOKIE_SECURE=is_production,
-    MAX_CONTENT_LENGTH=16 * 1024 * 1024,
+    MAX_CONTENT_LENGTH=vault.MAX_BACKUP_BYTES,
     PERMANENT_SESSION_LIFETIME=timedelta(seconds=int(os.environ.get("SESSION_TIMEOUT", 7 * 24 * 60 * 60))),
 )
 
@@ -71,7 +75,7 @@ def local_request_boundary():
     # login/register, whose unauthenticated requests cannot use session CSRF.
     if urlsplit(request.host_url).hostname not in {"127.0.0.1", "localhost"}:
         return jsonify({"error": "Janus aceita apenas acesso local."}), 403
-    if request.path.startswith("/api/") and request.is_json:
+    if request.path.startswith("/api/") and request.is_json and request.get_data(cache=True):
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
             return jsonify({"error": "Envie um objeto JSON válido."}), 400
@@ -92,6 +96,13 @@ def local_request_boundary():
         ):
             if field in data and not isinstance(data[field], str):
                 return jsonify({"error": f"O campo {field} deve ser texto."}), 400
+    if request.path.startswith("/api/browser/") and not request.path.startswith("/api/browser/pairings"):
+        supplied_origin = request.headers.get("Origin")
+        if supplied_origin and not cors_origin_allowed(supplied_origin):
+            return jsonify({"error": "Extensão não pareada."}), 403
+        if request.method == "OPTIONS":
+            return "", 204
+        return None
     origin = request.headers.get("Origin")
     if origin and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
         parsed = urlsplit(origin)
@@ -101,6 +112,13 @@ def local_request_boundary():
 
 @app.after_request
 def private_responses(response):
+    if request.path.startswith("/api/browser/") and not request.path.startswith("/api/browser/pairings"):
+        origin = request.headers.get("Origin")
+        if origin and cors_origin_allowed(origin):
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-Janus-Extension-Origin"
+            response.headers["Vary"] = "Origin"
     response.headers["Cache-Control"] = "no-store"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -122,6 +140,8 @@ def close_request_connections(error):
 @app.before_request
 def validate_csrf():
     if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return None
+    if request.path.startswith("/api/browser/") and not request.path.startswith("/api/browser/pairings"):
         return None
     public_note_access = request.path.startswith("/api/notes/access/")
     if not request.path.startswith("/api/") or request.path in CSRF_EXEMPT_PATHS or public_note_access:
@@ -261,6 +281,13 @@ def login():
         if not user or not verify_password(password, user["password_hash"]):
             return jsonify({"error": "Usuário ou senha inválidos"}), 401
 
+        if needs_rehash(user["password_hash"]):
+            with db.engine.begin() as migration:
+                migration.execute(
+                    db.users.update()
+                    .where(db.users.c.id == user["id"], db.users.c.password_hash == user["password_hash"])
+                    .values(password_hash=hash_password(password))
+                )
         # A login never unlocks the vault or preserves an older unlock.
         vault.lock(session.get("vault_token"))
         session.clear()
@@ -314,6 +341,8 @@ def generate_password():
 
         return jsonify({"password": password}), 200
 
+    except (ValueError, TypeError):
+        return jsonify({"error": "Comprimento inválido para os conjuntos selecionados"}), 400
     except Exception:
         app.logger.exception("Request failed")
         return jsonify({"error": "Erro interno do servidor"}), 500
@@ -431,9 +460,8 @@ def owned_credential(conn, credential_id):
 @login_required
 @credential_operation
 def get_credentials(conn, key):
-    rows = vault._credentials(conn, session["user_id"])
     return jsonify(
-        {"credentials": [{k: v for k, v in row.items() if k not in {"password_encrypted", "user_id"}} for row in rows]}
+        {"credentials": entries.list_credentials(conn, session["user_id"], key, request.args.get("trash") == "1")}
     )
 
 
@@ -442,29 +470,18 @@ def get_credentials(conn, key):
 @login_required
 @credential_operation
 def add_credential(conn, key):
-    data = request.get_json(silent=True) or {}
-    site = data.get("site_name", "")
-    password = data.get("password")
-    if not isinstance(site, str) or not site.strip() or not isinstance(password, str) or not password:
-        raise vault.VaultError("Nome do site e senha são obrigatórios.")
-    result = conn.execute(
-        db.credentials.insert().values(
-            user_id=session["user_id"],
-            site_name=site.strip(),
-            login=data.get("login", ""),
-            email=data.get("email", ""),
-            password_encrypted=vault.seal(password, key),
-        )
-    )
-    return jsonify({"message": "Credencial salva.", "id": result.inserted_primary_key[0]}), 201
+    item_id = entries.write(conn, session["user_id"], key, request.get_json(silent=True) or {})
+    return jsonify({"message": "Credencial salva.", "id": item_id}), 201
 
 
 @app.get("/api/credentials/<int:credential_id>")
 @login_required
 @credential_operation
 def get_credential(conn, key, credential_id):
-    row = owned_credential(conn, credential_id)
-    return jsonify({k: v for k, v in row.items() if k not in {"password_encrypted", "user_id"}})
+    item = entries.owned(conn, session["user_id"], credential_id, key)
+    return jsonify(
+        {k: v for k, v in item.items() if k not in {"password_encrypted", "user_id", "totp", "custom_fields", "notes"}}
+    )
 
 
 @app.post("/api/credentials/<int:credential_id>/reveal")
@@ -472,35 +489,14 @@ def get_credential(conn, key, credential_id):
 @login_required
 @credential_operation
 def reveal_credential(conn, key, credential_id):
-    row = owned_credential(conn, credential_id)
-    return jsonify(
-        {
-            **{k: v for k, v in row.items() if k not in {"password_encrypted", "user_id"}},
-            "password": vault.unseal(row["password_encrypted"], key),
-        }
-    )
+    return jsonify(entries.reveal(conn, session["user_id"], credential_id, key))
 
 
 @app.put("/api/credentials/<int:credential_id>")
 @login_required
 @credential_operation
 def update_credential(conn, key, credential_id):
-    row = owned_credential(conn, credential_id)
-    vault.unseal(row["password_encrypted"], key)  # Never overwrite undetected corruption.
-    data = request.get_json(silent=True) or {}
-    values = {field: data.get(field, row[field]) for field in ("site_name", "login", "email")}
-    if not isinstance(values["site_name"], str) or not values["site_name"].strip():
-        raise vault.VaultError("Nome do site é obrigatório.")
-    if "password" in data:
-        if not isinstance(data["password"], str) or not data["password"]:
-            raise vault.VaultError("Senha não pode ser vazia.")
-        values["password_encrypted"] = vault.seal(data["password"], key)
-    values["updated_at"] = func.current_timestamp()
-    conn.execute(
-        db.credentials.update()
-        .where(db.credentials.c.id == credential_id, db.credentials.c.user_id == session["user_id"])
-        .values(**values)
-    )
+    entries.write(conn, session["user_id"], key, request.get_json(silent=True) or {}, credential_id)
     return jsonify({"message": "Credencial atualizada."})
 
 
@@ -508,13 +504,8 @@ def update_credential(conn, key, credential_id):
 @login_required
 @credential_operation
 def delete_credential(conn, key, credential_id):
-    owned_credential(conn, credential_id)
-    conn.execute(
-        db.credentials.delete().where(
-            db.credentials.c.id == credential_id, db.credentials.c.user_id == session["user_id"]
-        )
-    )
-    return jsonify({"message": "Credencial deletada."})
+    entries.trash(conn, session["user_id"], key, credential_id, "trash")
+    return jsonify({"message": "Credencial movida para a lixeira."})
 
 
 def note_vault_required(function):
@@ -528,6 +519,18 @@ def note_vault_required(function):
             return function(*args, **kwargs)
 
     return wrapped
+
+
+def upgrade_note_crypto(note, password, content):
+    if note["content_encrypted"].startswith("v3$") and not needs_rehash(note["note_password_hash"]):
+        return
+    # Compare the old ciphertext to avoid overwriting a simultaneous note edit.
+    with db.engine.begin() as conn:
+        conn.execute(
+            db.secure_notes.update()
+            .where(db.secure_notes.c.id == note["id"], db.secure_notes.c.content_encrypted == note["content_encrypted"])
+            .values(content_encrypted=encrypt_password(content, password), note_password_hash=hash_password(password))
+        )
 
 
 # ==================== ROTAS DE NOTAS SEGURAS ====================
@@ -647,6 +650,7 @@ def get_note(note_id):
         if content is None:
             return jsonify({"error": "Nota indisponível ou criada com formato antigo"}), 410
 
+        upgrade_note_crypto(note, note_password, content)
         return (
             jsonify(
                 {
@@ -813,6 +817,7 @@ def access_note_with_token(access_token):
         if content is None:
             return jsonify({"error": "Nota criada com formato antigo; recrie-a"}), 410
 
+        upgrade_note_crypto(note, note_password, content)
         return (
             jsonify({"id": note["id"], "title": note["title"], "content": content, "created_at": note["created_at"]}),
             200,
@@ -835,6 +840,10 @@ def not_found(error):
 def server_error(error):
     return jsonify({"error": "Erro interno do servidor"}), 500
 
+
+install_features(app, login_required, credential_operation)
+install_browser(app, login_required, credential_operation)
+install_local(app, login_required, credential_operation)
 
 if __name__ == "__main__":
     # Inicializar banco de dados
