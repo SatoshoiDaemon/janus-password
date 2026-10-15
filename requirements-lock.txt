@@ -374,9 +374,9 @@ flask-cors==4.0.0 \
     --hash=sha256:bc3492bfd6368d27cfe79c7821df5a8a319e1a6d5eab277a3794be19bdc51783 \
     --hash=sha256:f268522fcb2f73e2ecdde1ef45e2fd5c71cc48fe03cffb4b441c6d1b40684eb0
     # via -r requirements.txt
-flask-limiter==3.8.0 \
-    --hash=sha256:0ab44f586d8cc349412791711b6cbafe8f86e7b60ad9e8f24f2686009f00900e \
-    --hash=sha256:686f8b4a75404e47b91565a795c70d29f69c145f6907f1f32522e962b134dada
+flask-limiter==4.1.1 \
+    --hash=sha256:ca11608fc7eec43dcea606964ca07c3bd4ec1ae89043a0f67f717899a4f48106 \
+    --hash=sha256:e1ae13e06e6b3e39a4902e7d240b901586b25932c2add7bd5f5eeb4bdc11111b
     # via -r requirements.txt
 greenlet==3.5.6 \
     --hash=sha256:0616b8f878098c5681fd8f0dc92d887551717402342a70f0abcbfea5f5ad8a44 \
