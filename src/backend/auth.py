@@ -81,6 +81,8 @@ def decrypt_password(encrypted_value, key_password):
     Legacy ciphertexts using the old fixed salt are intentionally rejected;
     silently accepting them would preserve the insecure encryption scheme.
     """
+    if not isinstance(encrypted_value, str) or not isinstance(key_password, str):
+        return None
     try:
         version, encoded_salt, token = encrypted_value.split("$", 2)
         if version != ENCRYPTED_VALUE_VERSION:

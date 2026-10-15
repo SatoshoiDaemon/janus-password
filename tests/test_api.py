@@ -18,6 +18,12 @@ def register_and_login(client, username=None, password="correct-password"):
     assert response.status_code == 201
     response = client.post("/api/login", json={"username": username, "password": password})
     assert response.status_code == 200
+    assert (
+        client.post(
+            "/api/vault/unlock", json={"master_password": "master-secret"}, headers=csrf_headers(client)
+        ).status_code
+        == 200
+    )
     return username
 
 
@@ -82,7 +88,6 @@ def test_credential_crud_and_wrong_master_password(authenticated_client):
             "login": "alice",
             "email": "alice@example.test",
             "password": "stored-secret",
-            "master_password": "master-secret",
         },
         headers=headers,
     )
@@ -94,15 +99,9 @@ def test_credential_crud_and_wrong_master_password(authenticated_client):
     assert listed.get_json()["credentials"][0]["site_name"] == "Example"
     assert "password_encrypted" not in listed.get_json()["credentials"][0]
 
-    wrong = client.get(
-        f"/api/credentials/{credential_id}",
-        json={"master_password": "wrong-master"},
-    )
+    wrong = client.post("/api/vault/unlock", json={"master_password": "wrong-master"}, headers=headers)
     assert wrong.status_code == 401
-    retrieved = client.get(
-        f"/api/credentials/{credential_id}",
-        json={"master_password": "master-secret"},
-    )
+    retrieved = client.post(f"/api/credentials/{credential_id}/reveal", headers=headers)
     assert retrieved.status_code == 200
     assert retrieved.get_json()["password"] == "stored-secret"
 
@@ -113,7 +112,6 @@ def test_credential_crud_and_wrong_master_password(authenticated_client):
             "login": "alice-2",
             "email": "alice2@example.test",
             "password": "updated-secret",
-            "master_password": "master-secret",
         },
         headers=headers,
     )
@@ -127,7 +125,7 @@ def test_credentials_are_isolated_between_users(client):
     headers = csrf_headers(client)
     created = client.post(
         "/api/credentials",
-        json={"site_name": "Private", "password": "secret", "master_password": "master"},
+        json={"site_name": "Private", "password": "secret"},
         headers=headers,
     )
     credential_id = created.get_json()["id"]
@@ -135,13 +133,7 @@ def test_credentials_are_isolated_between_users(client):
 
     register_and_login(client, "second-user")
     assert client.get("/api/credentials").get_json()["credentials"] == []
-    assert (
-        client.get(
-            f"/api/credentials/{credential_id}",
-            json={"master_password": "master"},
-        ).status_code
-        == 404
-    )
+    assert client.post(f"/api/credentials/{credential_id}/reveal", headers=csrf_headers(client)).status_code == 404
 
 
 def test_note_crud_and_wrong_note_password(authenticated_client):
@@ -155,9 +147,9 @@ def test_note_crud_and_wrong_note_password(authenticated_client):
     assert created.status_code == 201
     note_id = created.get_json()["id"]
 
-    wrong = client.get(f"/api/notes/{note_id}", json={"note_password": "wrong"})
+    wrong = client.post(f"/api/notes/{note_id}/reveal", headers=headers, json={"note_password": "wrong"})
     assert wrong.status_code == 401
-    note = client.get(f"/api/notes/{note_id}", json={"note_password": "note-secret"})
+    note = client.post(f"/api/notes/{note_id}/reveal", headers=headers, json={"note_password": "note-secret"})
     assert note.status_code == 200
     assert note.get_json()["content"] == "Secret text"
 
@@ -168,12 +160,17 @@ def test_note_crud_and_wrong_note_password(authenticated_client):
     )
     assert updated.status_code == 200
     assert (
-        client.get(f"/api/notes/{note_id}", json={"note_password": "note-secret"}).get_json()["content"]
+        client.post(f"/api/notes/{note_id}/reveal", headers=headers, json={"note_password": "note-secret"}).get_json()[
+            "content"
+        ]
         == "Updated text"
     )
 
     assert client.delete(f"/api/notes/{note_id}", headers=headers).status_code == 200
-    assert client.get(f"/api/notes/{note_id}", json={"note_password": "note-secret"}).status_code == 404
+    assert (
+        client.post(f"/api/notes/{note_id}/reveal", headers=headers, json={"note_password": "note-secret"}).status_code
+        == 404
+    )
 
 
 def test_authorization_and_password_generator_validation(client):

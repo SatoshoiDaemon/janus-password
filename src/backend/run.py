@@ -29,6 +29,8 @@ def main():
 
     # Configurações
     host = os.environ.get("HOST", "127.0.0.1")
+    if host not in {"127.0.0.1", "localhost"}:
+        raise RuntimeError("Janus must bind to the loopback interface")
     port = int(os.environ.get("PORT", 5000))
     debug = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
 

@@ -1,174 +1,75 @@
-# Testes de API - REST Client
+# Local API; replace placeholders with values from your local session.
+@baseUrl = http://127.0.0.1:5000
+@csrf = REPLACE_WITH_CSRF_TOKEN
 
-# Certifique-se de que o servidor está rodando (python -m src.backend.run)
-# Base URL: http://localhost:5000
-
-### ==================== AUTENTICAÇÃO ====================
-
-### Registrar novo usuário
-POST http://localhost:5000/api/register
+### Register (email is local account metadata; no remote account is created)
+POST {{baseUrl}}/api/register
 Content-Type: application/json
 
-{
-  "username": "testuser",
-  "email": "test@example.com",
-  "password": "password123",
-  "password_confirm": "password123"
-}
+{"username":"local-user","email":"local@example.test","password":"login-password","password_confirm":"login-password"}
 
-### Fazer login
-POST http://localhost:5000/api/login
+### Login (does not unlock vault; retain session cookie)
+POST {{baseUrl}}/api/login
 Content-Type: application/json
 
-{
-  "username": "testuser",
-  "password": "password123"
-}
+{"username":"local-user","password":"login-password"}
 
-### Fazer logout
-POST http://localhost:5000/api/logout
+### Get CSRF token using same session cookie; paste value into @csrf
+GET {{baseUrl}}/api/csrf-token
+
+### Check unlock status (does not extend idle timeout)
+GET {{baseUrl}}/api/vault/status
+
+### Unlock or initialize/migrate the vault
+POST {{baseUrl}}/api/vault/unlock
 Content-Type: application/json
+X-CSRF-Token: {{csrf}}
 
-### ==================== GERADOR DE SENHAS ====================
+{"master_password":"independent-master-password"}
 
-### Gerar senha com configurações padrão
-POST http://localhost:5000/api/generate-password
+### Add a credential; no master password in writes
+POST {{baseUrl}}/api/credentials
 Content-Type: application/json
+X-CSRF-Token: {{csrf}}
 
-{
-  "length": 16,
-  "use_uppercase": true,
-  "use_lowercase": true,
-  "use_digits": true,
-  "use_special": true
-}
+{"site_name":"Example","login":"alice","password":"stored-secret"}
 
-### Gerar senha apenas com letras
-POST http://localhost:5000/api/generate-password
+### List metadata, unlocked vault required
+GET {{baseUrl}}/api/credentials
+
+### Reveal using POST, not GET with a body
+POST {{baseUrl}}/api/credentials/1/reveal
+X-CSRF-Token: {{csrf}}
+
+### Export complete encrypted account vault
+POST {{baseUrl}}/api/vault/export
+X-CSRF-Token: {{csrf}}
+
+### Restore: replace backup with the full exported JSON; use an empty local account
+POST {{baseUrl}}/api/vault/restore
 Content-Type: application/json
+X-CSRF-Token: {{csrf}}
 
-{
-  "length": 12,
-  "use_uppercase": true,
-  "use_lowercase": true,
-  "use_digits": false,
-  "use_special": false
-}
+{"master_password":"independent-master-password","backup":{}}
 
-### Gerar senha longa
-POST http://localhost:5000/api/generate-password
+### Change master password; invalidates all existing unlocks
+POST {{baseUrl}}/api/vault/change-password
 Content-Type: application/json
+X-CSRF-Token: {{csrf}}
 
-{
-  "length": 128,
-  "use_uppercase": true,
-  "use_lowercase": true,
-  "use_digits": true,
-  "use_special": true
-}
+{"current_password":"independent-master-password","new_password":"another-strong-master-password"}
 
-### ==================== CREDENCIAIS ====================
-
-# Após o login, obtenha o CSRF token e envie X-CSRF-Token nas operações protegidas.
-GET http://localhost:5000/api/csrf-token
-
-### Listar todas as credenciais
-GET http://localhost:5000/api/credentials
-
-### Adicionar credencial
-POST http://localhost:5000/api/credentials
+### Reveal note (requires unlocked vault and independent note password)
+POST {{baseUrl}}/api/notes/1/reveal
 Content-Type: application/json
+X-CSRF-Token: {{csrf}}
 
-{
-  "site_name": "Gmail",
-  "login": "meu_usuario",
-  "email": "usuario@gmail.com",
-  "password": "senha_secreta_123",
-  "master_password": "password123"
-}
+{"note_password":"note-password"}
 
-### Acessar credencial específica (substituir ID)
-GET http://localhost:5000/api/credentials/1
-Content-Type: application/json
+### Explicit lock; login remains active
+POST {{baseUrl}}/api/vault/lock
+X-CSRF-Token: {{csrf}}
 
-{
-  "master_password": "password123"
-}
-
-### Atualizar credencial
-PUT http://localhost:5000/api/credentials/1
-Content-Type: application/json
-
-{
-  "site_name": "Gmail Pessoal",
-  "login": "novo_usuario",
-  "email": "novo_email@gmail.com",
-  "password": "nova_senha",
-  "master_password": "password123"
-}
-
-### Deletar credencial
-DELETE http://localhost:5000/api/credentials/1
-
-### ==================== NOTAS SEGURAS ====================
-
-### Listar todas as notas
-GET http://localhost:5000/api/notes
-
-### Criar nova nota segura
-POST http://localhost:5000/api/notes
-Content-Type: application/json
-
-{
-  "title": "Minhas Notas Importantes",
-  "content": "Esta é uma nota secreta que será criptografada",
-  "note_password": "nota123"
-}
-
-### Acessar nota específica (substituir ID)
-GET http://localhost:5000/api/notes/1
-Content-Type: application/json
-
-{
-  "note_password": "nota123"
-}
-
-### Atualizar nota
-PUT http://localhost:5000/api/notes/1
-Content-Type: application/json
-X-CSRF-Token: {{csrf_token}}
-
-{
-  "title": "Notas Atualizadas",
-  "content": "Conteúdo atualizado da nota",
-  "note_password": "nota123"
-}
-
-### Deletar nota
-DELETE http://localhost:5000/api/notes/1
-
-### ==================== ACESSO A NOTAS VIA URL ====================
-
-### Obter nota via token público (substituir token)
-POST http://localhost:5000/api/notes/access/[TOKEN_AQUI]
-Content-Type: application/json
-
-{
-  "note_password": "nota123"
-}
-
-### ==================== OBSERVAÇÕES ====================
-
-# 1. Certifique-se de estar logado antes de acessar endpoints protegidos
-# 2. Use a senha master al autenticar credenciais
-# 3. Use o navegador para testar endpoints de GET com login
-# 4. Você pode usar ferramentas como:
-#    - REST Client (VSCode Extension)
-#    - Postman
-#    - Insomnia
-#    - cURL
-#
-# Exemplo com cURL:
-# curl -X POST http://localhost:5000/api/login \
-#   -H "Content-Type: application/json" \
-#   -d '{"username":"testuser","password":"password123"}'
+### Logout; removes unlock and login session
+POST {{baseUrl}}/api/logout
+X-CSRF-Token: {{csrf}}

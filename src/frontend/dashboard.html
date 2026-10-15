@@ -19,6 +19,9 @@
             </div>
 
             <nav class="sidebar-nav">
+                <button class="nav-item" data-tab="vault">
+                    <span class="nav-icon icon-lock" aria-hidden="true"></span> Cofre e backup
+                </button>
                 <button class="nav-item active" data-tab="generator">
                     <span class="nav-icon icon-spark" aria-hidden="true"></span> Gerador de senhas
                 </button>
@@ -31,15 +34,56 @@
             </nav>
 
             <div class="sidebar-footer">
-                <div class="user-info" id="userInfo"><span class="avatar">J</span><span><small>cofre aberto por</small><strong>Usuário local</strong></span></div>
+                <div class="user-info" id="userInfo"><span class="avatar">J</span><span><small>sessão local de</small><strong>Usuário local</strong></span></div>
                 <button class="btn btn-logout" id="logoutBtn">
-                    <span class="icon icon-lock" aria-hidden="true"></span> Bloquear cofre
+                    <span class="icon icon-lock" aria-hidden="true"></span> Encerrar sessão
                 </button>
             </div>
         </aside>
 
         <!-- Main Content -->
         <main class="main-content">
+            <section id="vault" class="tab-content" aria-label="Acesso e recuperação do cofre">
+                <div class="tab-header"><div><h2>Cofre e backup</h2><p>Desbloqueie seus acessos e guarde uma cópia recuperável.</p></div></div>
+                <div class="content-card vault-controls">
+                <p id="vaultStatus" role="status">Verificando cofre…</p>
+                <form id="unlockForm" class="form">
+                    <label for="vaultMasterPassword">Senha mestra do cofre (separada da senha de login)</label>
+                    <input id="vaultMasterPassword" type="password" autocomplete="current-password" required aria-describedby="masterHelp">
+                    <div id="masterConfirmGroup" hidden>
+                        <label for="vaultMasterConfirm">Confirme a senha mestra ao configurar o cofre</label>
+                        <input id="vaultMasterConfirm" type="password" autocomplete="new-password">
+                    </div>
+                    <p id="masterHelp">No primeiro desbloqueio, defina a senha mestra. Se já houver credenciais, use a senha que as protege.</p>
+                    <button class="btn btn-primary" type="submit">Desbloquear cofre</button>
+                </form>
+                <div class="modal-buttons">
+                    <button class="btn btn-secondary" id="lockVaultBtn" type="button">Bloquear agora</button>
+                    <button class="btn btn-secondary" id="exportVaultBtn" type="button">Exportar backup criptografado</button>
+                    <button class="btn btn-secondary" id="changeMasterBtn" type="button">Trocar senha mestra</button>
+                </div>
+                <details id="restoreDetails">
+                <summary>Restaurar um backup em uma conta vazia</summary>
+                <form id="restoreForm" class="form">
+                    <p>Restaure em uma conta vazia. O arquivo inclui credenciais e notas; as notas mantêm suas próprias senhas.</p>
+                    <label for="backupFile">Arquivo de backup Janus</label>
+                    <input id="backupFile" type="file" accept=".janus,application/json" required>
+                    <label for="backupMasterPassword">Senha mestra usada na criação do backup</label>
+                    <input id="backupMasterPassword" type="password" autocomplete="off" required>
+                    <button class="btn btn-secondary" type="submit">Restaurar backup</button>
+                </form>
+                </details>
+                <form id="changeMasterForm" class="form" hidden>
+                    <label for="currentMaster">Senha mestra atual</label>
+                    <input id="currentMaster" type="password" autocomplete="current-password" required>
+                    <label for="newMaster">Nova senha mestra (mínimo 12 caracteres)</label>
+                    <input id="newMaster" type="password" autocomplete="new-password" minlength="12" required>
+                    <label for="confirmMaster">Confirme a nova senha mestra</label>
+                    <input id="confirmMaster" type="password" autocomplete="new-password" minlength="12" required>
+                    <button class="btn btn-primary" type="submit">Confirmar troca</button>
+                </form>
+                </div>
+            </section>
             <!-- Password Generator Tab -->
             <section id="generator" class="tab-content active">
                 <div class="tab-header">
@@ -185,11 +229,6 @@
                 </div>
 
                 <div class="form-group">
-                    <label for="credentialMasterPassword">Senha Mestre *</label>
-                    <input type="password" id="credentialMasterPassword" required placeholder="Digite sua senha mestre">
-                </div>
-
-                <div class="form-group">
                     <button type="button" class="btn btn-secondary" id="generatePasswordBtn">
                         🎲 Gerar Senha
                     </button>
@@ -288,7 +327,7 @@
     <div id="viewNoteModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3 id="viewNoteTitle">Ver Nota</h3>
+                <h3 id="viewNoteModalTitle">Ver Nota</h3>
                 <button class="modal-close" id="closeViewNoteModal">&times;</button>
             </div>
 
@@ -326,5 +365,6 @@
     </div>
 
     <script src="/js/script.js"></script>
+    <script src="/js/vault.js"></script>
 </body>
 </html>

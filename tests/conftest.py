@@ -2,12 +2,13 @@ import uuid
 
 import pytest
 
-from src.backend import database
+from src.backend import database, vault
 from src.backend.app import app, limiter
 
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
+    vault._sessions.clear()
     database.configure_database(f"sqlite:///{tmp_path / 'test.db'}")
     database.init_db()
     app.config.update(TESTING=True, SECRET_KEY="test-secret", RATELIMIT_ENABLED=False)
@@ -32,6 +33,12 @@ def authenticated_client(client):
     assert response.status_code == 201
     response = client.post("/api/login", json={"username": username, "password": password})
     assert response.status_code == 200
+    assert (
+        client.post(
+            "/api/vault/unlock", json={"master_password": "master-secret"}, headers=csrf_headers(client)
+        ).status_code
+        == 200
+    )
     return client
 
 

@@ -212,3 +212,17 @@ textarea { min-height: 150px; resize: vertical; }
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* Vault forms follow the existing paper/copper controls. Hidden forms must stay
+   hidden even though .form declares display:flex. */
+[hidden] { display: none !important; }
+.vault-controls { display: flex; flex-direction: column; gap: 24px; }
+.vault-controls .form { padding: 0; }
+.vault-controls .form label { font-size: 14px; font-weight: 600; }
+.vault-controls p { margin: 0; max-width: 70ch; overflow-wrap: anywhere; }
+.vault-controls .modal-buttons { flex-wrap: wrap; margin: 0; }
+.vault-controls summary { cursor: pointer; padding: 12px 0; color: var(--copper); font-weight: 600; }
+.vault-controls input { font-size: 16px; max-width: 100%; min-width: 0; }
+.vault-controls input[type=file] { white-space: normal; }
+.vault-controls button:disabled { cursor: wait; opacity: .65; }
+.vault-controls button { min-height: 44px; }

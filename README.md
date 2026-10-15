@@ -4,11 +4,13 @@ Janus is a local-first password manager for ordinary personal use. It is
 designed to run on a user's own computer, keep the default setup small, and
 avoid requiring a hosted account or a container platform.
 
-The project is intentionally close to a self-hosted application in spirit:
-the owner controls the process, database, credentials, and network exposure.
-It is not a managed cloud service. The current distribution is a local Flask
-application rather than a complete production self-hosting package with a
-reverse proxy, TLS automation, backups, and an operations console.
+Janus is an offline-first local application: run it on your own computer and
+use the browser as its interface. Flask, HTML/CSS/JavaScript and SQLite remain
+the core stack. Remote hosting and synchronization are not the default workflow.
+
+The implementation and remaining work are tracked in [ROADMAP.md](ROADMAP.md).
+See [vault architecture and recovery](docs/VAULT.md) before upgrading an existing
+vault, and for clean-install restoration, automatic backups and the Argon2id plan.
 
 > Janus is an educational and personal-use project. It is not presented as a
 > replacement for a professionally audited password manager. Review the
@@ -37,7 +39,10 @@ That leads to several deliberate decisions:
 - Cryptographically secure password generation.
 - User registration and session-based authentication.
 - PBKDF2-HMAC-SHA256 password hashing with a unique random salt per hash.
-- Credential encryption with a unique random salt per encrypted item.
+- Separate login and vault unlock, automatic idle lock and explicit lock.
+- Random vault data key, master-password envelope and atomic legacy migration.
+- Master-password changes without rewriting every credential.
+- Versioned encrypted export/restore and optional automatic local snapshots.
 - Secure notes encrypted with the note's own password.
 - Public note links protected by a note password, expiration, and revocation.
 - CSRF protection, rate limiting, restricted CORS, and secure production
@@ -61,6 +66,7 @@ Flask application (src/backend/app.py)
   ├── Application routes
   │     ├── Authentication
   │     ├── Password generation
+  │     ├── Vault unlock, encrypted backup and restore
   │     ├── Credentials
   │     └── Secure notes
   ├── Cryptography services (src/backend/auth.py)
@@ -93,7 +99,7 @@ renders the responses.
 
 ### Database
 
-SQLAlchemy is the portability layer. The schema contains users, encrypted
+SQLAlchemy is the portability layer. The schema contains users, vault key envelopes, a migration ledger, encrypted
 credentials, and secure notes. SQLite foreign-key enforcement is enabled for
 application connections.
 
@@ -114,16 +120,16 @@ new key with the stored salt and compares the result in constant time.
 
 ### Private credentials
 
-Credential passwords are encrypted before storage. The user's master password
-derives the Fernet key, and every encrypted item receives its own random
-16-byte salt. Stored ciphertexts use this versioned format:
+Credential passwords use a random vault data key (`v2$<Fernet token>`). The master
+password protects that key in a salted PBKDF2/Fernet `v1` envelope. Unlock validates
+the envelope and every credential. Existing `v1` credentials migrate atomically
+on the first successful unlock; failures leave records unchanged.
 
-~~~text
-v1$<base64 salt>$<Fernet token>
-~~~
-
-The master password is supplied when a credential is created, viewed, or
-updated. Janus does not store the master password.
+The master password is sent only to unlock/change/restore operations, never in
+a GET body. Saving and updating credentials require an unlocked server-side
+vault session; keys and passwords never enter Flask's client-side session cookie.
+The default idle unlock lifetime is five minutes. Password changes rewrap the key
+and revoke existing unlocks. [Details and recovery](docs/VAULT.md).
 
 ### Secure notes
 
@@ -162,13 +168,13 @@ It does not protect a machine that is already compromised. In particular:
 - the development Flask server should not be exposed directly to the public
   internet;
 - SQLite files still need secure operating-system permissions and backups;
-- HTTPS, reverse proxy configuration, monitoring, and backup automation are
-  deployment responsibilities;
-- records from the pre-security fixed-salt implementation must be recreated.
+- automatic local recovery snapshots must be explicitly configured;
+- pre-`v1` fixed-salt records require recovery using the original compatible
+  version against a separate database copy; migration never silently deletes them.
 
-For a serious deployment, place Janus behind a production WSGI server and
-reverse proxy, use HTTPS, configure a strong secret key, restrict network
-access, and establish encrypted backups.
+Use one local process. Multi-worker hosting is not supported by the ephemeral
+unlock registry. This change does not claim signed installers or an independent
+audit; these remain explicit roadmap items.
 
 ## Screenshots
 
@@ -307,3 +313,17 @@ See CONTRIBUTING.md.
 ## License
 
 Janus is released under the MIT License.
+
+## Vault workflow
+
+1. Register a local account and sign in with the **login password**.
+2. Unlock with the independent **master password**; initial empty-vault setup
+   requires at least 12 characters. Existing records are validated and migrated.
+3. Save/reveal credentials without re-entering the master password on every write.
+4. Export a `.janus` backup, or configure automatic pre-write snapshots in `.env`.
+5. Lock explicitly or allow the five-minute idle timeout. Ctrl+Shift+L locks;
+   Escape closes secret dialogs. Logging out also removes the unlock.
+
+To restore on another machine, register an empty local account, select the backup
+in the dashboard and enter the backup's master password. Account login passwords
+are separate; notes retain their individual note passwords. See [VAULT.md](docs/VAULT.md).

@@ -26,3 +26,10 @@ appropriate.
 
 Janus is a local-first educational project. Deployments that expose the
 development server directly to the public internet are out of scope.
+
+## Vault lifecycle
+
+See [vault architecture and recovery](docs/VAULT.md) for key formats, migration,
+backup restoration, known limitations and the Argon2id migration plan. Login and
+vault unlock are independent. Use one local process; never expose this local
+service directly to a network. An independent security audit is still pending.

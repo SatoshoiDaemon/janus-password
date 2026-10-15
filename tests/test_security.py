@@ -29,6 +29,9 @@ def test_public_note_uses_note_password_and_can_be_revoked(client):
     assert client.post("/api/login", json={"username": username, "password": password}).status_code == 200
 
     headers = csrf_headers(client)
+    assert (
+        client.post("/api/vault/unlock", json={"master_password": "master-secret"}, headers=headers).status_code == 200
+    )
     created = client.post(
         "/api/notes",
         json={"title": "Test note", "content": "private content", "note_password": "note-secret"},
