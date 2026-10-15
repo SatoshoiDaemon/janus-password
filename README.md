@@ -196,3 +196,11 @@ certificates. See [CONTRIBUTING.md](CONTRIBUTING.md), [CHANGELOG.md](CHANGELOG.m
 [architecture/threat model](docs/VAULT.md) and [security reporting](SECURITY.md).
 
 No telemetry, CDN assets, synchronization or hosted authentication is included.
+
+## Licenses
+
+Janus's own source remains MIT. The KDBX importer uses GPL-3.0-licensed PyKeePass;
+its license and source are distributed with native builds, and its terms still
+apply to combined distributions. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The build also includes `janus-sources.zip` beside executables. This source/notice
+handling does not turn the GPL dependency into an MIT-licensed dependency.

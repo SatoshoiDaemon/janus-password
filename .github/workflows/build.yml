@@ -26,6 +26,9 @@ jobs:
       - run: python -m pytest -q
       - run: python scripts/build_app.py
       - run: python scripts/build_extension.py
+      - name: Include importer and application sources
+        if: runner.os == 'Linux'
+        run: python scripts/source_bundle.py
       - run: python scripts/verify_reproducible.py
       - name: Smoke-test packaged CLI
         shell: bash

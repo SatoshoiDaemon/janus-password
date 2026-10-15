@@ -36,8 +36,8 @@ def main():
             command.extend(["--add-data", str(source) + os.pathsep + destination])
         command.append(entry)
         subprocess.run(command, cwd=ROOT, check=True)
-        for notice in ("LICENSE", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md"):
-            shutil.copyfile(ROOT / notice, ROOT / "dist" / name / notice)
+        for notice in ("LICENSE", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md", "packaging/PyKeePass-GPL-3.0.txt"):
+            shutil.copyfile(ROOT / notice, ROOT / "dist" / name / Path(notice).name)
 
 
 if __name__ == "__main__":
