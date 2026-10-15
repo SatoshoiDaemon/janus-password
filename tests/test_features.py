@@ -349,3 +349,12 @@ def test_legacy_note_crypto_upgrades_on_successful_access(authenticated_client):
         note = conn.execute(select(db.secure_notes)).mappings().one()
         assert note["content_encrypted"].startswith("v3$argon2id$")
         assert note["note_password_hash"].startswith("$argon2id$")
+
+
+def test_bitwarden_csv_preserves_encoded_custom_fields(authenticated_client):
+    csv = 'name,login_username,login_password,fields\nExample,alice,secret,"PIN: 1234\nRecovery: secret-code"\n'
+    response = api(authenticated_client, "/api/vault/import", data={"format": "csv", "content": csv, "confirmed": True})
+    assert response.status_code == 200
+    item_id = authenticated_client.get("/api/credentials").json["credentials"][0]["id"]
+    item = api(authenticated_client, f"/api/credentials/{item_id}/reveal").json
+    assert item["custom_fields"] == [{"name": "Imported custom fields", "value": "PIN: 1234\nRecovery: secret-code"}]

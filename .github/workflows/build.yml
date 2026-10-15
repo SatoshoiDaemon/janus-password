@@ -9,6 +9,7 @@ permissions:
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-22.04, windows-2022]
     runs-on: ${{ matrix.os }}
@@ -30,6 +31,11 @@ jobs:
         shell: bash
         run: |
           if [ "$RUNNER_OS" = Windows ]; then dist/JanusCLI/JanusCLI.exe --help; else dist/JanusCLI/JanusCLI --help; fi
+      - name: Native authenticated lifecycle
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then export JANUS_SMOKE_EXECUTABLE="$PWD/dist/Janus/Janus.exe"; else export JANUS_SMOKE_EXECUTABLE="$PWD/dist/Janus/Janus"; fi
+          python -m pytest -q tests/test_distribution.py::test_launcher_single_instance_and_authenticated_shutdown
       - name: Linux portable installer
         if: runner.os == 'Linux'
         run: |

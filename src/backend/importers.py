@@ -65,6 +65,10 @@ def parse_csv(text):
             "reprompt",
         }
         custom = [{"name": k, "value": v} for k, v in row.items() if k not in known]
+        if row.get("fields"):
+            # Preserve the original CSV encoding; multiline custom values cannot
+            # be split losslessly without a separate schema.
+            custom.append({"name": "Imported custom fields", "value": row["fields"]})
         if row.get("type") not in {None, "", "login"}:
             raise vault.VaultError(f"Tipo CSV não suportado na linha {number}; use JSON Bitwarden para outros tipos.")
         result.append(

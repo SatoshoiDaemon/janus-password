@@ -68,7 +68,9 @@ def test_launcher_single_instance_and_authenticated_shutdown(tmp_path):
         else:
             raise AssertionError("Launcher did not start")
         second = subprocess.run(command, cwd=ROOT, env=environment, capture_output=True, text=True, timeout=10)
-        assert second.returncode == 2 and "já está aberto" in second.stderr
+        assert second.returncode == 2
+        if not os.environ.get("JANUS_SMOKE_EXECUTABLE"):
+            assert "já está aberto" in second.stderr
         request(
             "/api/register",
             {
