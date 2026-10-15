@@ -28,9 +28,12 @@ window.fetch = async function(resource, options = {}) {
 
     const response = await nativeFetch(resource, options);
     if (response.status === 423 && typeof clearVaultUI === 'function') clearVaultUI();
-    if (response.status === 401 && !requestUrl.pathname.includes('/vault/')) {
-        if (typeof clearVaultUI === 'function') clearVaultUI();
-        window.location.href = '/login';
+    if (response.status === 401) {
+        const error = await response.clone().json().catch(() => ({}));
+        if (error.code === 'authentication_required') {
+            if (typeof clearVaultUI === 'function') clearVaultUI();
+            window.location.href = '/login';
+        }
     }
     return response;
 };

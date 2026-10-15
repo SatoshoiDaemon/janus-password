@@ -174,7 +174,9 @@ def test_note_crud_and_wrong_note_password(authenticated_client):
 
 
 def test_authorization_and_password_generator_validation(client):
-    assert client.get("/api/credentials").status_code == 401
+    unauthenticated = client.get("/api/credentials")
+    assert unauthenticated.status_code == 401
+    assert unauthenticated.json["code"] == "authentication_required"
     assert client.post("/api/generate-password", json={"length": 1}).status_code == 400
 
     response = client.post("/api/generate-password", json={"length": 24, "use_digits": False})

@@ -148,7 +148,7 @@ def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if "user_id" not in session:
-            return jsonify({"error": "Não autenticado"}), 401
+            return jsonify({"error": "Não autenticado", "code": "authentication_required"}), 401
         return f(*args, **kwargs)
 
     return decorated_function
