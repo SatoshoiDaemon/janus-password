@@ -8,6 +8,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from pathlib import Path
 
 from scripts.build_extension import build
@@ -23,6 +24,9 @@ def test_extension_zips_are_deterministic(tmp_path):
             hashlib.sha256((first / name).read_bytes()).digest()
             == hashlib.sha256((second / name).read_bytes()).digest()
         )
+
+    with zipfile.ZipFile(first / "janus-chromium.zip") as archive:
+        assert all(info.create_system == 3 and info.compress_type == zipfile.ZIP_STORED for info in archive.infolist())
 
 
 def test_launcher_single_instance_and_authenticated_shutdown(tmp_path):

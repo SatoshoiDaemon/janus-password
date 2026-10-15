@@ -30,7 +30,7 @@ def build(output=None):
             manifest["browser_specific_settings"] = {
                 "gecko": {"id": "janus-local@satoshoidaemon", "strict_min_version": "128.0"}
             }
-        with zipfile.ZipFile(output / f"janus-{browser}.zip", "w", zipfile.ZIP_DEFLATED) as archive:
+        with zipfile.ZipFile(output / f"janus-{browser}.zip", "w", zipfile.ZIP_STORED) as archive:
             files = {
                 path.name: path.read_text(encoding="utf-8").encode("utf-8")
                 for path in (ROOT / "extension").iterdir()
@@ -40,7 +40,8 @@ def build(output=None):
             files["manifest.json"] = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
             for name, content in sorted(files.items()):
                 info = zipfile.ZipInfo(name, date_time=(2020, 1, 1, 0, 0, 0))
-                info.compress_type = zipfile.ZIP_DEFLATED
+                info.create_system = 3
+                info.compress_type = zipfile.ZIP_STORED
                 info.external_attr = 0o644 << 16
                 archive.writestr(info, content)
     return output
