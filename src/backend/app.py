@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, session, redirect, url_for
+from flask import Flask, request, jsonify, session, redirect, url_for, g
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -10,8 +10,16 @@ import secrets
 from pathlib import Path
 
 from .database import get_db_connection, init_db
+from . import database as db
+from . import vault, entries
+from .features import install as install_features
+from .local import install_routes as install_local
+from .browser_bridge import install as install_browser, cors_origin_allowed
+from sqlalchemy import select
+from urllib.parse import urlsplit
 from .auth import (
     hash_password,
+    needs_rehash,
     verify_password,
     encrypt_password,
     decrypt_password,
@@ -38,6 +46,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE=os.environ.get("SESSION_COOKIE_SAMESITE", "Lax"),
     SESSION_COOKIE_SECURE=is_production,
+    MAX_CONTENT_LENGTH=vault.MAX_BACKUP_BYTES,
     PERMANENT_SESSION_LIFETIME=timedelta(seconds=int(os.environ.get("SESSION_TIMEOUT", 7 * 24 * 60 * 60))),
 )
 
@@ -61,8 +70,78 @@ CSRF_EXEMPT_PATHS = {
 
 
 @app.before_request
+def local_request_boundary():
+    # Host validation blocks DNS rebinding. The origin check also protects
+    # login/register, whose unauthenticated requests cannot use session CSRF.
+    if urlsplit(request.host_url).hostname not in {"127.0.0.1", "localhost"}:
+        return jsonify({"error": "Janus aceita apenas acesso local."}), 403
+    if request.path.startswith("/api/") and request.is_json and request.get_data(cache=True):
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify({"error": "Envie um objeto JSON válido."}), 400
+        for field in (
+            "username",
+            "email",
+            "password",
+            "password_confirm",
+            "master_password",
+            "current_password",
+            "new_password",
+            "site_name",
+            "login",
+            "title",
+            "content",
+            "note_password",
+            "new_note_password",
+        ):
+            if field in data and not isinstance(data[field], str):
+                return jsonify({"error": f"O campo {field} deve ser texto."}), 400
+    if request.path.startswith("/api/browser/") and not request.path.startswith("/api/browser/pairings"):
+        supplied_origin = request.headers.get("Origin")
+        if supplied_origin and not cors_origin_allowed(supplied_origin):
+            return jsonify({"error": "Extensão não pareada."}), 403
+        if request.method == "OPTIONS":
+            return "", 204
+        return None
+    origin = request.headers.get("Origin")
+    if origin and request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        parsed = urlsplit(origin)
+        if parsed.scheme not in {"http", "https"} or parsed.netloc != request.host:
+            return jsonify({"error": "Origem não autorizada."}), 403
+
+
+@app.after_request
+def private_responses(response):
+    if request.path.startswith("/api/browser/") and not request.path.startswith("/api/browser/pairings"):
+        origin = request.headers.get("Origin")
+        if origin and cors_origin_allowed(origin):
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+            response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-Janus-Extension-Origin"
+            response.headers["Vary"] = "Origin"
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+@app.errorhandler(vault.VaultError)
+def vault_error(error):
+    return jsonify({"error": str(error)}), error.status
+
+
+@app.teardown_request
+def close_request_connections(error):
+    for connection in g.pop("db_connections", []):
+        connection.close()
+
+
+@app.before_request
 def validate_csrf():
     if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return None
+    if request.path.startswith("/api/browser/") and not request.path.startswith("/api/browser/pairings"):
         return None
     public_note_access = request.path.startswith("/api/notes/access/")
     if not request.path.startswith("/api/") or request.path in CSRF_EXEMPT_PATHS or public_note_access:
@@ -89,7 +168,7 @@ def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if "user_id" not in session:
-            return jsonify({"error": "Não autenticado"}), 401
+            return jsonify({"error": "Não autenticado", "code": "authentication_required"}), 401
         return f(*args, **kwargs)
 
     return decorated_function
@@ -202,6 +281,16 @@ def login():
         if not user or not verify_password(password, user["password_hash"]):
             return jsonify({"error": "Usuário ou senha inválidos"}), 401
 
+        if needs_rehash(user["password_hash"]):
+            with db.engine.begin() as migration:
+                migration.execute(
+                    db.users.update()
+                    .where(db.users.c.id == user["id"], db.users.c.password_hash == user["password_hash"])
+                    .values(password_hash=hash_password(password))
+                )
+        # A login never unlocks the vault or preserves an older unlock.
+        vault.lock(session.get("vault_token"))
+        session.clear()
         # Criar sessão
         session["user_id"] = user["id"]
         session["username"] = user["username"]
@@ -218,6 +307,7 @@ def login():
 @limiter.limit("20 per minute")
 def logout():
     """Faz logout do usuário"""
+    vault.lock(session.get("vault_token"))
     session.clear()
     return jsonify({"message": "Logout realizado com sucesso!"}), 200
 
@@ -251,189 +341,196 @@ def generate_password():
 
         return jsonify({"password": password}), 200
 
+    except (ValueError, TypeError):
+        return jsonify({"error": "Comprimento inválido para os conjuntos selecionados"}), 400
     except Exception:
         app.logger.exception("Request failed")
         return jsonify({"error": "Erro interno do servidor"}), 500
 
 
-# ==================== ROTAS DE CREDENCIAIS ====================
+# ==================== COFRE LOCAL ====================
 
 
-@app.route("/api/credentials", methods=["GET"])
+@app.get("/api/vault/status")
 @login_required
-def get_credentials():
-    """Obtém todas as credenciais do usuário"""
-    try:
-        user_id = session["user_id"]
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, site_name, login, email, created_at, updated_at FROM credentials WHERE user_id = ? ORDER BY created_at DESC",
-            (user_id,),
+def vault_status():
+    with vault.mutex, db.engine.connect() as conn:
+        configured = vault._metadata(conn, session["user_id"]) is not None
+        try:
+            vault.key_for(conn, session["user_id"], session.get("vault_token"), touch=False)
+            unlocked = True
+        except vault.VaultError:
+            unlocked = False
+    return jsonify({"configured": configured, "unlocked": unlocked, "timeout": vault.TIMEOUT})
+
+
+@app.post("/api/vault/unlock")
+@limiter.limit("5 per minute")
+@login_required
+def unlock_vault():
+    data = request.get_json(silent=True) or {}
+    legacy = data.get("legacy_passwords")
+    if legacy is not None and (
+        not isinstance(legacy, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in legacy.items())
+    ):
+        raise vault.VaultError("Mapa de recuperação inválido.")
+    token = vault.unlock(session["user_id"], data.get("master_password"), legacy)
+    vault.lock(session.get("vault_token"))
+    session["vault_token"] = token
+    return jsonify({"message": "Cofre desbloqueado.", "timeout": vault.TIMEOUT})
+
+
+@app.post("/api/vault/lock")
+@login_required
+def lock_vault():
+    vault.lock(session.pop("vault_token", None))
+    return jsonify({"message": "Cofre bloqueado."})
+
+
+@app.post("/api/vault/change-password")
+@limiter.limit("5 per minute")
+@login_required
+def change_vault_password():
+    data = request.get_json(silent=True) or {}
+    current = data.get("current_password")
+    if not isinstance(current, str) or not current:
+        raise vault.VaultError("Informe a senha mestra atual.")
+    vault.change_password(session["user_id"], session.get("vault_token"), current, data.get("new_password"))
+    session.pop("vault_token", None)
+    return jsonify({"message": "Senha mestra alterada. Desbloqueie novamente."})
+
+
+@app.post("/api/vault/export")
+@limiter.limit("10 per minute")
+@login_required
+def export_vault():
+    response = jsonify(vault.export_backup(session["user_id"], session.get("vault_token")))
+    response.headers["Content-Disposition"] = 'attachment; filename="janus-backup.janus"'
+    return response
+
+
+@app.post("/api/vault/restore")
+@limiter.limit("5 per minute")
+@login_required
+def restore_vault():
+    data = request.get_json(silent=True) or {}
+    password = data.get("master_password")
+    if not isinstance(password, str) or not password:
+        raise vault.VaultError("Informe a senha mestra do backup.")
+    restored = vault.restore_backup(session["user_id"], data.get("backup"), password)
+    session.pop("vault_token", None)
+    return jsonify({"message": "Backup restaurado. Desbloqueie com a senha mestra do backup.", **restored})
+
+
+def credential_operation(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        with vault.mutex, vault.transaction(session["user_id"]) as conn:
+            key = vault.key_for(conn, session["user_id"], session.get("vault_token"))
+            # Passwords belong only on unlock/change endpoints. Reject old clients
+            # instead of silently ignoring a potentially mistyped master password.
+            data = request.get_json(silent=True) or {}
+            if "master_password" in data:
+                raise vault.VaultError("Desbloqueie o cofre em /api/vault/unlock antes de operar.")
+            if request.method in {"PUT", "DELETE"} or (
+                request.method == "POST" and not request.path.endswith("/reveal")
+            ):
+                vault.automatic_backup(conn, session["user_id"], key)
+            return function(conn, key, *args, **kwargs)
+
+    return wrapped
+
+
+def owned_credential(conn, credential_id):
+    row = (
+        conn.execute(
+            select(db.credentials).where(
+                db.credentials.c.id == credential_id, db.credentials.c.user_id == session["user_id"]
+            )
         )
-        credentials = [dict(c) for c in cursor.fetchall()]
-        conn.close()
-
-        return jsonify({"credentials": credentials}), 200
-
-    except Exception:
-        app.logger.exception("Request failed")
-        return jsonify({"error": "Erro interno do servidor"}), 500
+        .mappings()
+        .first()
+    )
+    if row is None:
+        raise vault.VaultError("Credencial não encontrada.", 404)
+    return row
 
 
-@app.route("/api/credentials", methods=["POST"])
+@app.get("/api/credentials")
+@login_required
+@credential_operation
+def get_credentials(conn, key):
+    return jsonify(
+        {"credentials": entries.list_credentials(conn, session["user_id"], key, request.args.get("trash") == "1")}
+    )
+
+
+@app.post("/api/credentials")
 @limiter.limit("30 per minute")
 @login_required
-def add_credential():
-    """Adiciona uma nova credencial"""
-    try:
-        user_id = session["user_id"]
-        data = request.get_json(silent=True) or {}
-        site_name = data.get("site_name", "").strip()
-        login = data.get("login", "").strip()
-        email = data.get("email", "").strip()
-        password = data.get("password", "")
-        master_password = data.get("master_password", "")
-
-        if not site_name:
-            return jsonify({"error": "Nome do site é obrigatório"}), 400
-
-        if not password:
-            return jsonify({"error": "Senha é obrigatória"}), 400
-
-        if not master_password:
-            return jsonify({"error": "Senha mestre é obrigatória"}), 400
-
-        # Encriptar a senha com a senha mestre
-        encrypted_password = encrypt_password(password, master_password)
-
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO credentials (user_id, site_name, login, email, password_encrypted) VALUES (?, ?, ?, ?, ?)",
-            (user_id, site_name, login, email, encrypted_password),
-        )
-        conn.commit()
-        credential_id = cursor.lastrowid
-        conn.close()
-
-        return jsonify({"message": "Credencial salva com sucesso!", "id": credential_id}), 201
-
-    except Exception:
-        app.logger.exception("Request failed")
-        return jsonify({"error": "Erro interno do servidor"}), 500
+@credential_operation
+def add_credential(conn, key):
+    item_id = entries.write(conn, session["user_id"], key, request.get_json(silent=True) or {})
+    return jsonify({"message": "Credencial salva.", "id": item_id}), 201
 
 
-@app.route("/api/credentials/<int:credential_id>", methods=["GET"])
+@app.get("/api/credentials/<int:credential_id>")
 @login_required
-def get_credential(credential_id):
-    """Obtém uma credencial específica com a senha descriptografada"""
-    try:
-        user_id = session["user_id"]
-        data = request.get_json(silent=True) or {}
-        master_password = data.get("master_password", "")
-
-        if not master_password:
-            return jsonify({"error": "Senha mestre é obrigatória"}), 400
-
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM credentials WHERE id = ? AND user_id = ?", (credential_id, user_id))
-        credential = cursor.fetchone()
-        conn.close()
-
-        if not credential:
-            return jsonify({"error": "Credencial não encontrada"}), 404
-
-        # Descriptografar senha
-        password = decrypt_password(credential["password_encrypted"], master_password)
-
-        if password is None:
-            return jsonify({"error": "Senha mestre incorreta"}), 401
-
-        return (
-            jsonify(
-                {
-                    "id": credential["id"],
-                    "site_name": credential["site_name"],
-                    "login": credential["login"],
-                    "email": credential["email"],
-                    "password": password,
-                    "created_at": credential["created_at"],
-                    "updated_at": credential["updated_at"],
-                }
-            ),
-            200,
-        )
-
-    except Exception:
-        app.logger.exception("Request failed")
-        return jsonify({"error": "Erro interno do servidor"}), 500
+@credential_operation
+def get_credential(conn, key, credential_id):
+    item = entries.owned(conn, session["user_id"], credential_id, key)
+    return jsonify(
+        {k: v for k, v in item.items() if k not in {"password_encrypted", "user_id", "totp", "custom_fields", "notes"}}
+    )
 
 
-@app.route("/api/credentials/<int:credential_id>", methods=["PUT"])
+@app.post("/api/credentials/<int:credential_id>/reveal")
+@limiter.limit("30 per minute")
 @login_required
-def update_credential(credential_id):
-    """Atualiza uma credencial"""
-    try:
-        user_id = session["user_id"]
-        data = request.get_json(silent=True) or {}
-        site_name = data.get("site_name", "").strip()
-        login = data.get("login", "").strip()
-        email = data.get("email", "").strip()
-        password = data.get("password")
-        master_password = data.get("master_password", "")
-
-        if not master_password:
-            return jsonify({"error": "Senha mestre é obrigatória"}), 400
-
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM credentials WHERE id = ? AND user_id = ?", (credential_id, user_id))
-        credential = cursor.fetchone()
-
-        if not credential:
-            conn.close()
-            return jsonify({"error": "Credencial não encontrada"}), 404
-
-        # Encriptar nova senha se fornecida
-        if password:
-            encrypted_password = encrypt_password(password, master_password)
-        else:
-            encrypted_password = credential["password_encrypted"]
-
-        cursor.execute(
-            "UPDATE credentials SET site_name = ?, login = ?, email = ?, password_encrypted = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
-            (site_name, login, email, encrypted_password, credential_id, user_id),
-        )
-        conn.commit()
-        conn.close()
-
-        return jsonify({"message": "Credencial atualizada com sucesso!"}), 200
-
-    except Exception:
-        app.logger.exception("Request failed")
-        return jsonify({"error": "Erro interno do servidor"}), 500
+@credential_operation
+def reveal_credential(conn, key, credential_id):
+    return jsonify(entries.reveal(conn, session["user_id"], credential_id, key))
 
 
-@app.route("/api/credentials/<int:credential_id>", methods=["DELETE"])
+@app.put("/api/credentials/<int:credential_id>")
 @login_required
-def delete_credential(credential_id):
-    """Deleta uma credencial"""
-    try:
-        user_id = session["user_id"]
+@credential_operation
+def update_credential(conn, key, credential_id):
+    entries.write(conn, session["user_id"], key, request.get_json(silent=True) or {}, credential_id)
+    return jsonify({"message": "Credencial atualizada."})
 
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM credentials WHERE id = ? AND user_id = ?", (credential_id, user_id))
-        conn.commit()
-        conn.close()
 
-        return jsonify({"message": "Credencial deletada com sucesso!"}), 200
+@app.delete("/api/credentials/<int:credential_id>")
+@login_required
+@credential_operation
+def delete_credential(conn, key, credential_id):
+    entries.trash(conn, session["user_id"], key, credential_id, "trash")
+    return jsonify({"message": "Credencial movida para a lixeira."})
 
-    except Exception:
-        app.logger.exception("Request failed")
-        return jsonify({"error": "Erro interno do servidor"}), 500
+
+def note_vault_required(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        with vault.mutex:
+            with db.engine.connect() as conn:
+                key = vault.key_for(conn, session["user_id"], session.get("vault_token"))
+                if request.method in {"POST", "PUT", "DELETE"} and not request.path.endswith("/reveal"):
+                    vault.automatic_backup(conn, session["user_id"], key)
+            return function(*args, **kwargs)
+
+    return wrapped
+
+
+def upgrade_note_crypto(note, password, content):
+    if note["content_encrypted"].startswith("v3$") and not needs_rehash(note["note_password_hash"]):
+        return
+    # Compare the old ciphertext to avoid overwriting a simultaneous note edit.
+    with db.engine.begin() as conn:
+        conn.execute(
+            db.secure_notes.update()
+            .where(db.secure_notes.c.id == note["id"], db.secure_notes.c.content_encrypted == note["content_encrypted"])
+            .values(content_encrypted=encrypt_password(content, password), note_password_hash=hash_password(password))
+        )
 
 
 # ==================== ROTAS DE NOTAS SEGURAS ====================
@@ -441,6 +538,7 @@ def delete_credential(credential_id):
 
 @app.route("/api/notes", methods=["GET"])
 @login_required
+@note_vault_required
 def get_notes():
     """Obtém todas as notas do usuário"""
     try:
@@ -464,6 +562,7 @@ def get_notes():
 @app.route("/api/notes", methods=["POST"])
 @limiter.limit("30 per minute")
 @login_required
+@note_vault_required
 def add_note():
     """Cria uma nova nota segura"""
     try:
@@ -519,9 +618,10 @@ def add_note():
         return jsonify({"error": "Erro interno do servidor"}), 500
 
 
-@app.route("/api/notes/<int:note_id>", methods=["GET"])
+@app.route("/api/notes/<int:note_id>/reveal", methods=["POST"])
 @limiter.limit("30 per minute")
 @login_required
+@note_vault_required
 def get_note(note_id):
     """Obtém uma nota específica"""
     try:
@@ -550,6 +650,7 @@ def get_note(note_id):
         if content is None:
             return jsonify({"error": "Nota indisponível ou criada com formato antigo"}), 410
 
+        upgrade_note_crypto(note, note_password, content)
         return (
             jsonify(
                 {
@@ -572,6 +673,7 @@ def get_note(note_id):
 @app.route("/api/notes/<int:note_id>", methods=["PUT"])
 @limiter.limit("30 per minute")
 @login_required
+@note_vault_required
 def update_note(note_id):
     """Atualiza uma nota"""
     try:
@@ -594,6 +696,11 @@ def update_note(note_id):
         if not note_password or not verify_password(note_password, note["note_password_hash"]):
             conn.close()
             return jsonify({"error": "Senha da nota incorreta"}), 401
+
+        current_content = decrypt_password(note["content_encrypted"], note_password)
+        if current_content is None:
+            conn.close()
+            return jsonify({"error": "Nota corrompida ou formato não suportado; nenhum dado foi alterado"}), 409
 
         # Encriptar novo conteúdo se fornecido
         if content:
@@ -627,6 +734,7 @@ def update_note(note_id):
 @app.route("/api/notes/<int:note_id>", methods=["DELETE"])
 @limiter.limit("30 per minute")
 @login_required
+@note_vault_required
 def delete_note(note_id):
     """Deleta uma nota"""
     try:
@@ -648,6 +756,7 @@ def delete_note(note_id):
 @app.route("/api/notes/<int:note_id>/revoke-access", methods=["POST"])
 @limiter.limit("20 per minute")
 @login_required
+@note_vault_required
 def revoke_note_access(note_id):
     """Revoke a public note token without deleting the note."""
     try:
@@ -708,6 +817,7 @@ def access_note_with_token(access_token):
         if content is None:
             return jsonify({"error": "Nota criada com formato antigo; recrie-a"}), 410
 
+        upgrade_note_crypto(note, note_password, content)
         return (
             jsonify({"id": note["id"], "title": note["title"], "content": content, "created_at": note["created_at"]}),
             200,
@@ -731,10 +841,17 @@ def server_error(error):
     return jsonify({"error": "Erro interno do servidor"}), 500
 
 
+install_features(app, login_required, credential_operation)
+install_browser(app, login_required, credential_operation)
+install_local(app, login_required, credential_operation)
+
 if __name__ == "__main__":
     # Inicializar banco de dados
     init_db()
 
     # Iniciar aplicação
     debug = os.environ.get("FLASK_DEBUG", "false").lower() == "true"
-    app.run(debug=debug, host=os.environ.get("HOST", "127.0.0.1"), port=int(os.environ.get("PORT", 5000)))
+    host = os.environ.get("HOST", "127.0.0.1")
+    if host not in {"127.0.0.1", "localhost"}:
+        raise RuntimeError("Janus must bind to the loopback interface")
+    app.run(debug=debug, host=host, port=int(os.environ.get("PORT", 5000)))

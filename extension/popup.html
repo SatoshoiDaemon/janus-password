@@ -1,0 +1,8 @@
+<!doctype html><html lang="pt-BR"><meta charset="utf-8"><title>Janus</title><link rel="stylesheet" href="popup.css">
+<body><h1>Janus</h1><p id="status" role="status">Desbloqueie o cofre na aplicação local.</p>
+<details><summary>Parear com o Janus</summary><p>Copie esta origem para “Parear navegador” no Janus:</p><output id="origin"></output>
+<form id="settings"><label>Endereço local<input id="endpoint" value="http://127.0.0.1:5000" required></label><label>Token de pareamento<input id="token" type="password" required autocomplete="off"></label><button>Salvar pareamento</button></form><button id="forget">Esquecer pareamento</button></details>
+<button id="matches">Buscar acessos desta página</button><div id="results"></div>
+<button id="capture">Capturar credencial desta página</button><button id="generate">Gerar senha</button>
+<form id="save" hidden><label>Site<input id="name" required></label><label>Login<input id="login"></label><label>Senha<input id="password" type="password" required autocomplete="off"></label><p id="site"></p><button>Salvar no cofre local</button></form>
+<script src="popup.js"></script></body></html>

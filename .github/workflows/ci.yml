@@ -26,8 +26,16 @@ jobs:
       - name: Run tests
         run: python -m pytest -q --cov=src/backend --cov-report=term-missing
       - name: Run Ruff
-        run: python -m ruff check src tests
+        run: python -m ruff check src tests scripts
       - name: Check Black formatting
-        run: python -m black --check src tests
+        run: python -m black --check src tests scripts
       - name: Run Bandit
         run: python -m bandit -r src/backend -ll
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Extension behavior and JavaScript syntax
+        run: |
+          node --test tests/extension.test.cjs
+          for source in src/frontend/js/*.js extension/*.js; do node --check "$source"; done

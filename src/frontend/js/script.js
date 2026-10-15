@@ -26,7 +26,16 @@ window.fetch = async function(resource, options = {}) {
         options.headers = headers;
     }
 
-    return nativeFetch(resource, options);
+    const response = await nativeFetch(resource, options);
+    if (response.status === 423 && typeof clearVaultUI === 'function') clearVaultUI();
+    if (response.status === 401) {
+        const error = await response.clone().json().catch(() => ({}));
+        if (error.code === 'authentication_required') {
+            if (typeof clearVaultUI === 'function') clearVaultUI();
+            window.location.href = '/login';
+        }
+    }
+    return response;
 };
 
 // ==================== INICIALIZAÇÃO ====================
@@ -46,10 +55,10 @@ function displayUserInfo() {
     })
     .then(response => response.ok ? response.json() : Promise.reject())
     .then(data => {
-        userInfo.innerHTML = `<span class="avatar">${escapeHtml((data.username || 'U').charAt(0).toUpperCase())}</span><span><small>cofre aberto por</small><strong>${escapeHtml(data.username || 'Usuário local')}</strong></span>`;
+        userInfo.innerHTML = `<span class="avatar">${escapeHtml((data.username || 'U').charAt(0).toUpperCase())}</span><span><small>sessão local de</small><strong>${escapeHtml(data.username || 'Usuário local')}</strong></span>`;
     })
     .catch(() => {
-        userInfo.innerHTML = '<span class="avatar">U</span><span><small>cofre aberto por</small><strong>Usuário local</strong></span>';
+        userInfo.innerHTML = '<span class="avatar">U</span><span><small>sessão local de</small><strong>Usuário local</strong></span>';
     });
 }
 
@@ -60,6 +69,7 @@ async function logout() {
         });
 
         if (response.ok) {
+            clearVaultUI();
             window.location.href = '/login';
         }
     } catch (error) {
@@ -127,7 +137,7 @@ function setupEventListeners() {
 
 // ==================== FUNÇÕES DE NAVEGAÇÃO ====================
 function initializeDashboard() {
-    switchTab('generator');
+    switchTab('vault');
 }
 
 function switchTab(tabName) {
@@ -242,6 +252,7 @@ function openAddCredentialModal() {
     currentCredentialId = null;
     document.getElementById('credentialModalTitle').textContent = 'Adicionar Credencial';
     document.getElementById('credentialForm').reset();
+    document.getElementById('customFields').replaceChildren();
     openModal('credentialModal');
 }
 
@@ -265,7 +276,7 @@ async function saveCredential(e) {
     const login = document.getElementById('credentialLogin').value;
     const email = document.getElementById('credentialEmail').value;
     const password = document.getElementById('credentialPassword').value;
-    const master_password = document.getElementById('credentialMasterPassword').value;
+
 
     try {
         const method = currentCredentialId ? 'PUT' : 'POST';
@@ -281,7 +292,7 @@ async function saveCredential(e) {
                 login: login,
                 email: email,
                 password: password,
-                master_password: master_password
+                ...credentialExtraValues()
             })
         });
 
@@ -309,7 +320,9 @@ async function loadCredentials() {
         const data = await response.json();
 
         if (response.ok) {
-            displayCredentials(data.credentials);
+            if (vaultUnlocked) displayCredentials(data.credentials);
+        } else if (response.status !== 423) {
+            showMessage(data.error || 'Não foi possível carregar as credenciais. Tente abrir a aba novamente.', 'error');
         }
     } catch (error) {
         console.error('Erro:', error);
@@ -317,28 +330,9 @@ async function loadCredentials() {
 }
 
 function displayCredentials(credentials) {
-    const container = document.getElementById('credentialsList');
-
-    if (credentials.length === 0) {
-        container.innerHTML = '<p class="empty-state">Nenhuma credencial salva. Adicione uma nova!</p>';
-        return;
-    }
-
-    container.innerHTML = credentials.map(cred => `
-        <div class="credential-item">
-            <div class="credential-info">
-                <div class="credential-name">${escapeHtml(cred.site_name)}</div>
-                <div class="credential-meta">
-                    ${cred.login ? `login: ${escapeHtml(cred.login)}` : ''}
-                    ${cred.email ? ` · email: ${escapeHtml(cred.email)}` : ''}
-                </div>
-            </div>
-            <div class="item-actions">
-                <button class="btn btn-secondary" onclick="viewCredential(${cred.id})">Ver segredo</button>
-                <button class="btn btn-danger" onclick="confirmDeleteCredential(${cred.id})">Excluir</button>
-            </div>
-        </div>
-    `).join('');
+    credentialCache = credentials;
+    updateCredentialFilters();
+    renderCredentialResults();
 }
 
 function escapeHtml(text) {
@@ -348,24 +342,12 @@ function escapeHtml(text) {
 }
 
 async function viewCredential(id) {
-    const master_password = prompt('Digite sua senha mestre para visualizar:');
-    
-    if (!master_password) return;
-
     try {
-        const response = await fetch(`/api/credentials/${id}`, {
-            method: 'GET',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                master_password: master_password
-            })
-        });
+        const response = await fetch(`/api/credentials/${id}/reveal`, {method: 'POST'});
 
         const data = await response.json();
 
-        if (response.ok) {
+        if (response.ok && vaultUnlocked) {
             currentCredentialId = id;
             document.getElementById('viewCredentialSite').textContent = data.site_name;
             document.getElementById('viewCredentialLogin').textContent = data.login || '-';
@@ -404,7 +386,8 @@ function copyCredentialPassword() {
 }
 
 function confirmDeleteCredential(id) {
-    if (confirm('Tem certeza que deseja deletar esta credencial?')) {
+    if (confirm('Mover esta credencial para a lixeira?')) {
+        currentCredentialId = id;
         deleteCredential();
     }
 }
@@ -420,7 +403,7 @@ async function deleteCredential() {
         const data = await response.json();
 
         if (response.ok) {
-            showMessage('Credencial deletada!', 'success');
+            showMessage('Credencial movida para a lixeira!', 'success');
             closeViewCredentialModal();
             loadCredentials();
         } else {
@@ -434,6 +417,8 @@ async function deleteCredential() {
 
 function closeViewCredentialModal() {
     closeModal('viewCredentialModal');
+    document.getElementById('viewCredentialPassword').value = '';
+    document.getElementById('viewCredentialPassword').type = 'password';
     currentCredentialId = null;
 }
 
@@ -497,7 +482,9 @@ async function loadNotes() {
         const data = await response.json();
 
         if (response.ok) {
-            displayNotes(data.notes);
+            if (vaultUnlocked) displayNotes(data.notes);
+        } else if (response.status !== 423) {
+            showMessage(data.error || 'Não foi possível carregar as notas. Tente abrir a aba novamente.', 'error');
         }
     } catch (error) {
         console.error('Erro:', error);
@@ -534,8 +521,8 @@ async function viewNote(id) {
     if (!note_password) return;
 
     try {
-        const response = await fetch(`/api/notes/${id}`, {
-            method: 'GET',
+        const response = await fetch(`/api/notes/${id}/reveal`, {
+            method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
@@ -546,7 +533,7 @@ async function viewNote(id) {
 
         const data = await response.json();
 
-        if (response.ok) {
+        if (response.ok && vaultUnlocked) {
             currentNoteId = id;
             document.getElementById('viewNoteTitle').textContent = data.title;
             document.getElementById('viewNoteContent').textContent = data.content;
@@ -599,6 +586,8 @@ async function deleteNote() {
 
 function closeViewNoteModal() {
     closeModal('viewNoteModal');
+    document.getElementById('viewNoteContent').textContent = '';
+    document.getElementById('noteAccessLink').value = '';
     currentNoteId = null;
 }
 

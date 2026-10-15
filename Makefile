@@ -10,12 +10,12 @@ test:
 	python -m pytest -q --cov=src/backend --cov-report=term-missing
 
 lint:
-	python -m ruff check src tests
-	python -m black --check src tests
+	python -m ruff check src tests scripts
+	python -m black --check src tests scripts
 
 format:
 	python -m ruff check --fix src tests
-	python -m black src tests
+	python -m black src tests scripts
 
 security:
 	python -m bandit -r src/backend -ll

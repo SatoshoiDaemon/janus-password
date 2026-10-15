@@ -8,7 +8,20 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from sqlalchemy import Column, ForeignKey, Integer, MetaData, String, Table, Text, create_engine, inspect, text
+from sqlalchemy import (
+    Column,
+    ForeignKey,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    Text,
+    create_engine,
+    inspect,
+    select,
+    text,
+    event,
+)
 from sqlalchemy.engine import Connection, Engine, URL, RowMapping
 from sqlalchemy.pool import NullPool
 
@@ -69,6 +82,15 @@ def configure_database(url: str | None = None) -> Engine:
         poolclass=NullPool if is_sqlite else None,
         connect_args={"check_same_thread": False, "timeout": 30} if is_sqlite else {},
     )
+    if is_sqlite:
+
+        @event.listens_for(engine, "connect")
+        def sqlite_pragmas(connection, record):
+            cursor = connection.cursor()
+            cursor.execute("PRAGMA foreign_keys = ON")
+            cursor.execute("PRAGMA busy_timeout = 30000")
+            cursor.close()
+
     return engine
 
 
@@ -109,6 +131,71 @@ secure_notes = Table(
     Column("created_at", Text, server_default=text("CURRENT_TIMESTAMP")),
     Column("updated_at", Text, server_default=text("CURRENT_TIMESTAMP")),
 )
+
+
+vaults = Table(
+    "vaults",
+    metadata,
+    Column("user_id", Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True),
+    Column("wrapped_key", Text, nullable=False),
+    Column("revision", Integer, nullable=False),
+    Column("crypto_version", Integer, nullable=False),
+)
+schema_migrations = Table(
+    "schema_migrations",
+    metadata,
+    Column("version", Integer, primary_key=True),
+)
+
+
+credential_data = Table(
+    "credential_data",
+    metadata,
+    Column("credential_id", Integer, ForeignKey("credentials.id", ondelete="CASCADE"), primary_key=True),
+    Column("user_id", Integer, ForeignKey("users.id"), nullable=False),
+    Column("payload", Text, nullable=False),
+    Column("deleted_at", Text),
+)
+credential_history = Table(
+    "credential_history",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("user_id", Integer, ForeignKey("users.id"), nullable=False),
+    Column("credential_id", Integer, ForeignKey("credentials.id", ondelete="CASCADE"), nullable=False),
+    Column("payload", Text, nullable=False),
+    Column("created_at", Text, nullable=False),
+)
+vault_items = Table(
+    "vault_items",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("user_id", Integer, ForeignKey("users.id"), nullable=False),
+    Column("kind", String(32), nullable=False),
+    Column("name", Text, nullable=False),
+    Column("payload", Text, nullable=False),
+    Column("deleted_at", Text),
+    Column("updated_at", Text, nullable=False),
+)
+attachments = Table(
+    "attachments",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("user_id", Integer, ForeignKey("users.id"), nullable=False),
+    Column("credential_id", Integer, ForeignKey("credentials.id", ondelete="CASCADE")),
+    Column("payload", Text, nullable=False),
+    Column("created_at", Text, nullable=False),
+)
+browser_pairings = Table(
+    "browser_pairings",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("user_id", Integer, ForeignKey("users.id"), nullable=False),
+    Column("name", Text, nullable=False),
+    Column("origin", Text, nullable=False),
+    Column("token_hash", String(64), nullable=False, unique=True),
+    Column("created_at", Text, nullable=False),
+)
+portable_tables = {t.name: t for t in (credential_data, credential_history, vault_items, attachments)}
 
 
 def _placeholder_sql(sql: str, params: Any) -> tuple[str, dict[str, Any]]:
@@ -187,7 +274,12 @@ def get_db_connection() -> ConnectionAdapter:
     if engine.dialect.name == "sqlite":
         connection.execute(text("PRAGMA busy_timeout = 30000"))
         connection.execute(text("PRAGMA foreign_keys = ON"))
-    return ConnectionAdapter(connection)
+    adapter = ConnectionAdapter(connection)
+    from flask import g, has_request_context
+
+    if has_request_context():
+        g.setdefault("db_connections", []).append(adapter)
+    return adapter
 
 
 def init_db() -> None:
@@ -205,6 +297,16 @@ def init_db() -> None:
             )
         if "access_token_revoked_at" not in column_names:
             connection.execute(text("ALTER TABLE secure_notes ADD COLUMN access_token_revoked_at TIMESTAMP"))
+        if (
+            connection.execute(select(schema_migrations.c.version).where(schema_migrations.c.version == 1)).first()
+            is None
+        ):
+            connection.execute(schema_migrations.insert().values(version=1))
+        if (
+            connection.execute(select(schema_migrations.c.version).where(schema_migrations.c.version == 2)).first()
+            is None
+        ):
+            connection.execute(schema_migrations.insert().values(version=2))
     print(f"Database initialized successfully ({engine.dialect.name}).")
 
 

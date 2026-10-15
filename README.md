@@ -1,309 +1,206 @@
 # Janus
 
-Janus is a local-first password manager for ordinary personal use. It is
-designed to run on a user's own computer, keep the default setup small, and
-avoid requiring a hosted account or a container platform.
+Janus is an offline-first password manager that runs on your computer. Flask,
+plain HTML/CSS/JavaScript and SQLite remain its core. No hosted account,
+synchronization service, Docker stack or remote database is required.
 
-The project is intentionally close to a self-hosted application in spirit:
-the owner controls the process, database, credentials, and network exposure.
-It is not a managed cloud service. The current distribution is a local Flask
-application rather than a complete production self-hosting package with a
-reverse proxy, TLS automation, backups, and an operations console.
+## What is included
 
-> Janus is an educational and personal-use project. It is not presented as a
-> replacement for a professionally audited password manager. Review the
-> threat model before storing important secrets.
+- Separate local login and vault unlock; five-minute idle lock by default.
+- Argon2id password hashes and encrypted key envelopes, with compatible PBKDF2
+  readers and automatic upgrades after valid authentication.
+- Transactional vault migration, master-password changes, encrypted backups,
+  complete restoration and configurable automatic local snapshots.
+- CSV, Bitwarden JSON, KeePass XML and encrypted KDBX import, with preview,
+  confirmation, duplicate handling and rollback on failure.
+- Instant search, folders, tags, favorites, multiple URLs, custom fields,
+  credential history, trash and restoration.
+- Local checks for weak, reused and old passwords; keyboard shortcuts and
+  best-effort timed clipboard clearing.
+- TOTP, encrypted attachments, identities, cards, secure notes and passphrases.
+- Independent named local vaults, desktop chooser and developer CLI.
+- Chromium/Firefox extensions with revocable pairing, explicit fill/capture and
+  exact-origin matching.
+- Native Linux/Windows build recipes, Linux installer, Windows Setup installer,
+  reproducibility verification, release checksums and signed build provenance.
 
-## Why Janus exists
+This is not a claim that Janus has passed an independent security audit. The
+implemented controls and their limitations are documented in
+[the threat model](docs/VAULT.md). External review must be recorded as external
+review; automated tests and build signatures do not establish cryptographic safety.
 
-Janus is built for a simple use case: a person wants a private tool that can
-run locally, store credentials in a local database, and remain useful without
-depending on an external service.
+## Install and open
 
-That leads to several deliberate decisions:
+Native builds are produced by the **Local application builds** workflow in
+[Actions](https://github.com/SatoshoiDaemon/janus-password/actions). Pull requests
+produce review artifacts; version tags produce releases and build attestations.
+A workflow definition is not itself a published release or OS-vendor signature.
 
-- SQLite is the default because it is portable, easy to back up, and requires
-  no database server.
-- Docker is not required because the primary target is a local application,
-  not a multi-service deployment.
-- The frontend uses plain HTML, CSS, and JavaScript so it remains easy to
-  inspect, modify, and run.
-- SQLAlchemy provides an upgrade path to PostgreSQL or MySQL.
-- Security-sensitive behavior is implemented in the backend and exercised by
-  local automated tests.
+**Linux:** extract `Janus-Linux.tar.gz`, run `sh install.sh`, and open Janus from
+the applications menu. The portable executables also work without installation.
+**Windows:** run `Janus-0.3.0-Windows-Setup.exe`; it installs for the current user.
+Neither installer requires Python on the target machine.
 
-## Features
+The desktop chooser opens an existing named vault or creates one by name. Each
+vault uses its own SQLite file. The app starts a loopback-only Waitress process,
+opens the browser, and provides **Encerrar Janus** in the local settings. A file
+lock prevents two processes opening the same named vault simultaneously. Choose
+another port when running different vaults simultaneously.
 
-- Cryptographically secure password generation.
-- User registration and session-based authentication.
-- PBKDF2-HMAC-SHA256 password hashing with a unique random salt per hash.
-- Credential encryption with a unique random salt per encrypted item.
-- Secure notes encrypted with the note's own password.
-- Public note links protected by a note password, expiration, and revocation.
-- CSRF protection, rate limiting, restricted CORS, and secure production
-  cookies.
-- SQLite by default, with optional PostgreSQL and MySQL drivers.
+Upgrades replace application binaries separately from user data. The default
+user data directory is `~/.local/share/Janus` on Linux and `%LOCALAPPDATA%\Janus`
+on Windows. `JANUS_HOME` overrides it. It contains `vaults`, `backups` and
+`config.json`. Existing source-tree `database.db` files remain supported and are
+not silently moved or deleted.
 
-## Architecture
+## Run from source
 
-Janus is a small layered web application:
-
-~~~text
-Browser
-  │ HTML/CSS/JavaScript + Fetch API
-  ▼
-Flask application (src/backend/app.py)
-  ├── Request security
-  │     ├── Session authentication
-  │     ├── CSRF validation
-  │     ├── Rate limiting
-  │     └── CORS policy
-  ├── Application routes
-  │     ├── Authentication
-  │     ├── Password generation
-  │     ├── Credentials
-  │     └── Secure notes
-  ├── Cryptography services (src/backend/auth.py)
-  │     ├── PBKDF2 password hashing
-  │     ├── Fernet encryption
-  │     └── Public access tokens
-  └── Database adapter (src/backend/database.py)
-        └── SQLAlchemy → SQLite, PostgreSQL, or MySQL
-~~~
-
-### Backend
-
-The Flask application serves both the API and the static frontend. Routes
-live in src/backend/app.py, while cryptographic primitives live in
-src/backend/auth.py.
-
-The backend owns authorization decisions. Every credential and note query is
-scoped to the authenticated user's ID. Public note access is a separate
-route that requires both a valid token and the note password.
-
-### Frontend
-
-The frontend is dependency-free. HTML screens live in src/frontend, shared
-styles live in src/frontend/css/style.css, and dashboard behavior lives in
-src/frontend/js/script.js.
-
-The frontend never receives database credentials or server-side encryption
-keys. It sends user actions to the Flask API over the local session and
-renders the responses.
-
-### Database
-
-SQLAlchemy is the portability layer. The schema contains users, encrypted
-credentials, and secure notes. SQLite foreign-key enforcement is enabled for
-application connections.
-
-SQLite uses a local connection strategy suitable for a single-user or small
-local process: connections are not pooled, writes have an explicit busy
-timeout, and read/write contention is handled more gracefully.
-
-## Security model
-
-Janus separates account authentication, private credential access, and public
-note sharing.
-
-### Account password
-
-The account password is never stored in plaintext. It is hashed with
-PBKDF2-HMAC-SHA256 and a unique 32-byte random salt. Verification derives a
-new key with the stored salt and compares the result in constant time.
-
-### Private credentials
-
-Credential passwords are encrypted before storage. The user's master password
-derives the Fernet key, and every encrypted item receives its own random
-16-byte salt. Stored ciphertexts use this versioned format:
-
-~~~text
-v1$<base64 salt>$<Fernet token>
-~~~
-
-The master password is supplied when a credential is created, viewed, or
-updated. Janus does not store the master password.
-
-### Secure notes
-
-Notes deliberately use a different model:
-
-- The note password is the access password.
-- The note password is hashed for verification.
-- The content is encrypted with a key derived from that same note password.
-- Public access still requires the note password; the token alone is not
-  sufficient.
-- Public tokens expire and can be revoked without deleting the note.
-
-### Request protection
-
-- Authenticated routes require a signed session.
-- Authenticated state-changing API requests require a CSRF token.
-- Login, registration, generation, writes, and public note access are rate
-  limited.
-- CORS is disabled unless an explicit allowlist is configured.
-- Production cookies can be HttpOnly, SameSite, and Secure.
-- Internal exception details are logged server-side, not returned to users.
-- Public note tokens have expiration and revocation state.
-
-## Threat model and limitations
-
-Janus protects against common application-level mistakes such as plaintext
-password storage, cross-user record access, missing CSRF checks, and
-unrestricted public note tokens.
-
-It does not protect a machine that is already compromised. In particular:
-
-- a process with access to the running application may inspect memory or
-  intercept input;
-- losing both the database and the required passwords may make recovery
-  impossible;
-- the development Flask server should not be exposed directly to the public
-  internet;
-- SQLite files still need secure operating-system permissions and backups;
-- HTTPS, reverse proxy configuration, monitoring, and backup automation are
-  deployment responsibilities;
-- records from the pre-security fixed-salt implementation must be recreated.
-
-For a serious deployment, place Janus behind a production WSGI server and
-reverse proxy, use HTTPS, configure a strong secret key, restrict network
-access, and establish encrypted backups.
-
-## Screenshots
-
-### Sign in
-
-![Janus sign-in screen](docs/screenshots/login.png)
-
-### Create an account
-
-![Janus registration screen](docs/screenshots/register.png)
-
-## Technology choices
-
-- Python 3.11+ for a mature runtime and broad library support.
-- Flask for a small, explicit local web service.
-- SQLAlchemy for one database interface across supported engines.
-- SQLite for a zero-setup, file-based default.
-- PostgreSQL and MySQL drivers for users who already operate a server.
-- Fernet for authenticated symmetric encryption.
-- PBKDF2-HMAC-SHA256 for password-based key derivation and hashing.
-- Vanilla JavaScript for a minimal frontend supply-chain surface.
-- Pytest, Ruff, Black, and Bandit for repeatable quality checks.
-
-## Quick start
-
-~~~bash
+```bash
 python -m venv .venv
-source .venv/bin/activate       # Windows: .venv\Scripts\activate
-python -m pip install -r requirements-dev.txt
-python -m src.backend.database
+source .venv/bin/activate         # Windows: .venv\Scripts\activate
+python -m pip install -r requirements.txt
 python -m src.backend.run
-~~~
+```
 
-Open http://127.0.0.1:5000.
+Open `http://127.0.0.1:5000`. Register a local account, log in, and set/unlock the
+independent master password in **Cofre e backup**. Initial empty vaults require
+at least 12 characters. No email is sent; the email field is local account metadata.
 
-The default database is database.db in the project root. It is ignored by
-Git and is created automatically. Janus can be used entirely offline after
-its dependencies are installed.
+```bash
+python -m src.backend.run --vault personal --port 5000
+python -m src.backend.run --vault work --port 5001 --no-browser
+python -m src.backend.run --list-vaults
+```
 
-## Database configuration
+Keep the process local. `HOST=0.0.0.0` is rejected. The independent unlock registry
+requires one process per vault, although the HTTP server uses multiple threads.
+Existing optional PostgreSQL/MySQL adapters remain source compatibility features;
+the native local workflow and integration tests target SQLite.
 
-### Default: local SQLite
+## Everyday use
 
-No database server or Docker is required:
+**Credenciais** supports instant search by name, login, email, URL, folder and
+tag, plus folder/favorite filters. Edit a credential to manage its multiple URLs,
+custom fields and TOTP seed. “Histórico” lists previous versions; restoring a
+version preserves the version it replaces. Deletion first moves to the trash;
+permanent deletion requires a separate action from the trash.
 
-~~~bash
-DB_ENGINE=sqlite
-DB_PATH=database.db
-~~~
+**Itens e anexos** stores identities, cards and vault-key-protected notes with
+editable labeled fields. Attachments are encrypted and may be independent or
+associated with a credential; each file is limited to 8 MiB.
 
-### Optional PostgreSQL or MySQL
+**Notas seguras** preserves the original independently password-protected note
+model. Public local links have token/password/expiration/revocation controls.
+These notes keep their own passwords when exported/restored.
 
-Set DATABASE_URL to a SQLAlchemy URL:
+`Ctrl+K` searches credentials, `Ctrl+Shift+L` locks and `Escape` clears/closes
+secret dialogs. Clipboard clearing after 30 seconds depends on browser permission
+and does not erase clipboard contents replaced by another application.
 
-~~~bash
-# PostgreSQL with TLS required
-DATABASE_URL='postgresql+psycopg://user:password@host:5432/janus?sslmode=require'
+## Backup and import
 
-# MySQL
-DATABASE_URL='mysql+pymysql://user:password@host:3306/janus'
-~~~
+Unlock, then choose **Exportar backup criptografado**. Restore the `.janus` file
+into an empty local account using the backup's master password. Backups contain
+credentials, metadata, history, trash, structured items, notes and attachments.
+Restoration remaps IDs and revokes old note links. Login passwords, machine
+configuration and browser pairing tokens are intentionally installation-local.
 
-Alternatively, configure DB_ENGINE, DB_HOST, DB_PORT, DB_NAME, DB_USER,
-DB_PASSWORD, and the optional SSL variables shown in .env.example.
-DATABASE_URL takes precedence. Never commit credentials, connection strings,
-database dumps, or real secrets.
+Automatic snapshots are pre-write recovery points. The launcher enables them in
+the per-vault backup directory. Configure interval/retention in the interface or
+with `JANUS_BACKUP_DIR`, `JANUS_BACKUP_INTERVAL`, `JANUS_BACKUP_RETENTION`.
+Use manual export to capture the final latest state before moving computers.
+The JSON request/backup limit defaults to 256 MiB and can be raised with
+`JANUS_MAX_BACKUP_BYTES`; an oversized export fails explicitly.
 
-## Development commands
+Import is local: select CSV, Bitwarden unencrypted JSON, KeePass XML or KDBX;
+provide the KDBX password/keyfile if required; inspect the preview and confirm.
+KDBX preserves entry attachments. Bitwarden login, card, identity and note types
+are supported. Unknown types, unexported attachments/passkeys and unsupported
+values produce an explicit error instead of silently skipping data. CSV supports
+common KeePass/Bitwarden column aliases and preserves unknown columns as custom
+fields. Do not leave plaintext export files on disk after verifying the import.
 
-~~~bash
-make install   # Install runtime and development dependencies
-make run       # Initialize the configured database and start Flask
-make test      # Run tests with coverage
-make lint      # Run Ruff and Black checks
-make security  # Run Bandit
-make check     # lint + security + tests
-~~~
+See [VAULT.md](docs/VAULT.md) for legacy migration and recovery details.
 
-The test suite covers password hashing, encryption, password generation,
-registration, login, logout, user isolation, credential CRUD, note CRUD,
-public token access, wrong passwords, validation, authorization, CSRF, and
-the dashboard identity endpoint.
+## Browser extensions
 
-## Project structure
+Download/extract `janus-chromium.zip` or `janus-firefox.zip` from the build:
 
-~~~text
-Janus/
-├── src/
-│   ├── backend/
-│   │   ├── app.py              # Flask routes and API
-│   │   ├── auth.py             # Hashing, encryption, and tokens
-│   │   ├── database.py         # SQLAlchemy configuration and schema
-│   │   └── run.py              # Local application entry point
-│   └── frontend/
-│       ├── css/style.css       # Shared interface styles
-│       ├── js/script.js        # Dashboard behavior
-│       └── *.html              # Application screens
-├── tests/                      # Unit and HTTP integration tests
-├── docs/screenshots/           # README interface screenshots
-├── .github/                    # CI, Dependabot, and templates
-├── Makefile                    # Standard local commands
-├── pyproject.toml              # Tool configuration
-├── requirements.txt            # Runtime dependencies
-└── LICENSE                     # MIT license
-~~~
+1. Chromium: enable developer mode at `chrome://extensions` and load unpacked.
+   Firefox: load its manifest through `about:debugging` for local development.
+   Permanent Firefox installation requires Mozilla signing; the source ZIP and
+   GitHub build provenance do not replace that store requirement.
+2. Open the extension and copy its displayed `chrome-extension://…` or
+   `moz-extension://…` origin.
+3. In Janus, open **Cofre e backup → Parear navegador**, enter the origin and a
+   recognizable name, and create a token. Paste the token into the extension.
+4. Unlock Janus locally. On a login page, choose **Buscar acessos desta página**,
+   then click a specific credential to fill it. Capture and saving also require
+   explicit user actions; forms are never automatically submitted.
 
-## GitHub and maintenance
+Matching includes scheme, IDNA hostname and effective port. Parent/subdomains,
+lookalikes and HTTP/HTTPS transitions do not inherit credentials. Filling is
+restricted to the top frame and a single visible password form whose action
+stays on the same origin; ambiguous/cross-origin forms are refused. Tokens can be
+revoked from Janus. A paired extension cannot unlock a locked vault or retrieve
+credentials for an unrelated origin.
 
-The repository includes GitHub Actions for tests, Ruff, Black, and Bandit;
-Dependabot updates for Python dependencies and Actions; issue templates; a
-pull-request template; and contribution, security, and conduct policies.
+## CLI
 
-See CONTRIBUTING.md before submitting a change. Behavior changes should
-include or update tests, and local changes should pass make check.
+The installer supplies `janus-cli` / `JanusCLI.exe`. From source, replace the
+executable with `python -m src.backend.cli`:
 
-## Local backup guidance
+```bash
+janus-cli vaults
+janus-cli create-vault work
+janus-cli --vault work open --port 5001
+janus-cli --vault work list
+janus-cli --vault work add Example --login alice --url https://example.com
+janus-cli --vault work get 1 --show-password
+janus-cli --vault work export backup.janus
+janus-cli --vault work restore backup.janus
+janus-cli --vault work import keepass-kdbx passwords.kdbx
+janus-cli passphrase
+```
 
-With SQLite, a basic backup is a copy of database.db while the application is
-stopped. For a more robust workflow, use SQLite's backup facilities or a
-database-aware backup tool. Backups contain encrypted secret values but still
-contain account metadata, tokens, and ciphertexts, so protect them with
-appropriate filesystem permissions and encryption.
+Login/master/credential passwords are read with `getpass`, not command-line
+arguments. Secret output requires `--show-password`. Restore can initialize an
+empty local account after confirming its new login password. CLI exports refuse
+to overwrite an existing file.
 
-For PostgreSQL or MySQL, use the backup and restore procedures appropriate to
-the chosen database server.
+## Build, verify and contribute
 
-## Security reporting
+```bash
+python -m pip install --require-hashes -r requirements-lock.txt
+make check
+python scripts/build_app.py
+python scripts/build_extension.py
+python scripts/verify_reproducible.py
+```
 
-Read SECURITY.md before reporting a vulnerability. Never include passwords,
-access tokens, database credentials, or personal data in a public issue.
+Build natively on Linux or Windows; cross-compiling Windows from Linux is not
+supported. The lock pins build/runtime/test dependencies with hashes. Two builds
+on the same OS/runtime must be byte-identical or CI fails. This does not claim
+identical native binaries across operating systems or Python toolchains.
 
-## Contributing
+Tagged releases use GitHub OIDC build-provenance attestations and SHA-256
+checksums. Verify artifacts with:
 
-See CONTRIBUTING.md.
+```bash
+gh attestation verify Janus-Linux.tar.gz --repo SatoshoiDaemon/janus-password
+sha256sum --check Janus-Linux-SHA256SUMS.txt
+```
 
-## License
+These attestations sign provenance, not Windows Authenticode or Mozilla add-on
+certificates. See [CONTRIBUTING.md](CONTRIBUTING.md), [CHANGELOG.md](CHANGELOG.md),
+[architecture/threat model](docs/VAULT.md) and [security reporting](SECURITY.md).
 
-Janus is released under the MIT License.
+No telemetry, CDN assets, synchronization or hosted authentication is included.
+
+## Licenses
+
+Janus's own source remains MIT. The KDBX importer uses GPL-3.0-licensed PyKeePass;
+its license and source are distributed with native builds, and its terms still
+apply to combined distributions. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The build also includes `janus-sources.zip` beside executables. This source/notice
+handling does not turn the GPL dependency into an MIT-licensed dependency.
