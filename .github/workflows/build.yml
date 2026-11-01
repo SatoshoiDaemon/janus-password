@@ -60,7 +60,7 @@ jobs:
       - name: SHA256 checksums
         shell: bash
         run: python scripts/checksums.py
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: Janus-${{ runner.os }}
           path: |
